@@ -23,6 +23,9 @@ def main():
                     help="pupil jitter filter (default adaptive 1€)")
     ap.add_argument("--show-raw-trace", action="store_true",
                     help="also draw the raw pupil signal faint (overlay + traces)")
+    ap.add_argument("--eye", choices=["auto", "left", "right", "both"], default="auto",
+                    help="which eye's trace to display (default auto=single best-tracked eye; "
+                         "'both' only when the eyes differ, e.g. INO)")
     args = ap.parse_args()
     if args.propose:
         propose_init(args.video, args.output_dir)
@@ -31,7 +34,8 @@ def main():
     elif args.review:
         review(args.video, args.output_dir)
     else:
-        run(args.video, args.output_dir, filter_mode=args.filter, show_raw=args.show_raw_trace)
+        run(args.video, args.output_dir, filter_mode=args.filter, show_raw=args.show_raw_trace,
+            eye=args.eye)
 
 
 if __name__ == "__main__":

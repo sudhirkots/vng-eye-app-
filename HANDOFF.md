@@ -1,6 +1,25 @@
 # VNG-EYE app — session handoff
 
-> **CANONICAL DOCS:** `PROJECT_VISION_AND_REQUIREMENTS.md` (what to build + order),
+> # 🔑 CODE WORD: **EYEVNG**
+> One of the **two canonical EYEVNG docs** (say "EYEVNG" to pull both up):
+> **`VISION.md`** — what we're building, requirements, rules, decisions.
+> **`HANDOFF.md`** — current status + running session log (this file).
+
+> **SESSION 2026-06-25 (env fix + display rules):**
+> - **Local Python fixed.** This PC (`C:\Users\Dr.Sudhir`) had no working Python — the `.venv` was
+>   built on another machine (`C:\Users\sudhi\...`). Installed **Python 3.12.10** (`winget`,
+>   `--scope user`) and repaired `.venv\pyvenv.cfg` to point at it; existing cp312 site-packages
+>   (mediapipe 0.10.18, opencv 4.11, numpy 1.26.4, scipy) work. Run with `.\.venv\Scripts\python.exe`.
+> - **Neuritis re-tracked.** `nystagmus at rest to left in right vestibular neuritis.mp4` now has a real
+>   **canthus-relative** trace (its old folder was the failed affine version, ~empty).
+> - **VNG display rules implemented & LOCKED** — see `VISION.md` → "VNG Display Rules". Single eye by
+>   default (`--eye auto|left|right|both`, both only for INO); trace synced; **no band over the video**;
+>   **trace never over the eyes** → rendered in a **strip BELOW the video** (canvas extended downward,
+>   because clips zoom over the eyes). Code: `pupil_tracker.py` (`superimpose_traces`, `run`), `app.py`.
+> - **Renamed** `PROJECT_VISION_AND_REQUIREMENTS.md` → `VISION.md`; refs updated. **Code word = EYEVNG.**
+> - **Uncommitted.** All the above is in the working tree, not committed.
+
+> **CANONICAL DOCS:** `VISION.md` (what to build + order),
 > `docs/TRACKING_PHILOSOPHY.md` (tracking design — source of truth), `docs/CLINICAL_REQUIREMENTS.md`
 > (clinical reasoning / why), `SYSTEM_ARCHITECTURE.md` (Stage 0 + data flow), `IMPLEMENTATION_PLAN.md`
 > (Stage 0→5 order). This handoff and `STABLE_TRACKING.md`/`VERIFICATION_MODE.md`/

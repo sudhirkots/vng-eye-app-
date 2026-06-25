@@ -501,6 +501,57 @@ def render_trace_panel(times, lx, rx, t_now, width, height=220, window=8.0):
     return img
 
 
+def superimpose_traces(vis, times, channels, t_now, y0, window=8.0):
+    """Draw scrolling VNG trace lines on the frame BELOW the eyes (band starts at `y0`) — NO opaque
+    background band, and never over the eyes. `channels` = list of (label, lines) where
+    lines = [(vals, color), ...]; each channel occupies an equal horizontal band from `y0` to the
+    bottom, auto-scaled to its own visible data, sharing one red time cursor. Lines get a thin dark
+    outline for contrast against the video instead of a panel. Causal — only data up to t_now."""
+    h, w = vis.shape[:2]
+    band_total = h - y0
+    t0 = max(0.0, t_now - window)
+
+    def X(t):
+        return int((t - t0) / max(window, 1e-6) * (w - 1))
+
+    def label_text(s, org):                  # outlined text, readable over any background, no band
+        cv2.putText(vis, s, org, cv2.FONT_HERSHEY_SIMPLEX, 0.44, (0, 0, 0), 3, cv2.LINE_AA)
+        cv2.putText(vis, s, org, cv2.FONT_HERSHEY_SIMPLEX, 0.44, (255, 255, 255), 1, cv2.LINE_AA)
+
+    bh = band_total // max(len(channels), 1)
+    for ci, (label, lines) in enumerate(channels):
+        by0, by1 = y0 + ci * bh, y0 + (ci + 1) * bh
+        mt, mb = 16, 8
+        vis_vals = [vals[i] for (vals, _) in lines for i in range(len(times))
+                    if times[i] >= t0 and vals[i] is not None]
+        if vis_vals:
+            ymin, ymax = min(vis_vals), max(vis_vals)
+            if ymax - ymin < 5:
+                ymax, ymin = ymax + 5, ymin - 5
+            pad = 0.12 * (ymax - ymin)
+            ymin -= pad; ymax += pad
+
+            def Y(v, by0=by0, by1=by1, ymin=ymin, ymax=ymax):
+                return int(by0 + mt + (by1 - by0 - mt - mb) * (1 - (v - ymin) / (ymax - ymin)))
+            for vals, color in lines:
+                prev = None
+                for i in range(len(times)):
+                    if times[i] < t0:
+                        continue
+                    v = vals[i]
+                    if v is None:
+                        prev = None; continue
+                    p = (X(times[i]), Y(v))
+                    if prev is not None:
+                        cv2.line(vis, prev, p, (0, 0, 0), 3, cv2.LINE_AA)   # dark outline
+                        cv2.line(vis, prev, p, color, 1, cv2.LINE_AA)       # coloured trace
+                    prev = p
+        label_text(label, (6, by0 + 14))
+    xc = X(t_now)
+    cv2.line(vis, (xc, y0), (xc, h), (0, 0, 255), 1, cv2.LINE_AA)           # shared time cursor
+    return vis
+
+
 # ----------------------------------------------------------------------------- main run
 HEAD_REF_LANDMARKS = ("nose_bridge_mid", "nose_tip", "outer_canthus_L", "outer_canthus_R",
                       "inner_canthus_L", "inner_canthus_R")
@@ -581,7 +632,8 @@ def canthus_relative(pupil, inner, outer):
     return float(np.dot(vec, ux)), float(np.dot(vec, uy))
 
 
-def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adaptive", show_raw=True):
+def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adaptive", show_raw=True,
+        eye="auto"):
     video_path = Path(video_path)
     out_dir = Path(output_dir) / (video_path.stem + "_tracked")
 
@@ -628,9 +680,13 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
     print(f"Filter: {filter_mode}")
     scale = min(1.0, OVERLAY_MAX_W / width)
     ow, oh = int(width * scale), int(height * scale)
-    panel_h = 200                            # scrolling eye-in-socket trace strip under the video
+    # The trace goes in a dedicated strip BELOW the video (extended canvas), NEVER over the video
+    # pixels — so it can never cover the eyes. (These clips zoom/pan over the eyes, so any on-video
+    # overlay would eventually land on them.) The strip is synced to playback; eyes stay fully visible.
+    band_h = max(170, int(0.34 * oh))
+    out_h = oh + band_h
     writer = cv2.VideoWriter(str(out_dir / "tracking_overlay.mp4"),
-                             cv2.VideoWriter_fourcc(*"mp4v"), fps, (ow, oh + panel_h))
+                             cv2.VideoWriter_fourcc(*"mp4v"), fps, (ow, out_h))
 
     csv_f = (out_dir / "tracking.csv").open("w", newline="", encoding="utf-8")
     cw = csv.writer(csv_f)
@@ -667,6 +723,14 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
     q_counts = {}                            # transform quality tally
     tracked_series = []
     counts = {}
+    # DISPLAY eye selection: show ONE eye by default (conjugate nystagmus on both eyes is redundant
+    # and cluttered); use --eye both only when the eyes differ, e.g. INO. The CSV always keeps BOTH.
+    show_both = (eye == "both")
+    forced = {"left": "L", "right": "R"}.get(eye)
+    if forced and not confirmed.get(forced):
+        forced = "L" if confirmed.get("L") else "R"     # asked-for eye wasn't approved → fall back
+    chosen_eye = forced                                  # for "auto": locked after a short warmup
+    valid_L = valid_R = 0
     seen_bad = saved_bad = 0
     stride = max(1, total // max(1, max_debug_frames))
     fr = 0
@@ -758,9 +822,30 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
         # OVERLAY = RAW detected positions (verification: the marker must sit ON the pupil with no
         # lag). The FILTERED signal is used only for the VNG trace + CSV, where shimmer matters and a
         # small filter lag is harmless. This keeps the overlay honest and never sliding.
+        if clh is not None:
+            valid_L += 1
+        if crh is not None:
+            valid_R += 1
+        if not show_both and chosen_eye is None and max(valid_L, valid_R) >= 25:
+            chosen_eye = "L" if valid_L >= valid_R else "R"   # lock to the better-tracked eye
+
         vis = draw_overlay(frame, scale, lt, rt, fstatus, fr, t, face_tracks)
-        panel = render_trace_panel(times, cor_lh, cor_rh, t, ow, height=panel_h)
-        writer.write(np.vstack([vis, panel]))
+        if show_both:
+            chans = [("Horizontal  eye-in-socket (pupil vs canthi)   L green / R blue",
+                      [(cor_lh, GREEN), (cor_rh, BLUE)]),
+                     ("Vertical   L green / R blue", [(cor_lv, GREEN), (cor_rv, BLUE)])]
+        else:
+            e = chosen_eye or ("R" if valid_R >= valid_L else "L")
+            col = GREEN if e == "L" else BLUE
+            side = "LEFT eye" if e == "L" else "RIGHT eye"
+            chans = [(f"Horizontal  eye-in-socket (pupil vs canthi)   {side}",
+                      [(cor_lh if e == "L" else cor_rh, col)]),
+                     ("Vertical", [(cor_lv if e == "L" else cor_rv, col)])]
+        canvas = np.zeros((out_h, ow, 3), np.uint8)   # video on top, trace strip below (eyes never covered)
+        canvas[:oh] = vis
+        cv2.line(canvas, (0, oh), (ow, oh), (60, 60, 60), 1)
+        superimpose_traces(canvas, times, chans, t, oh)
+        writer.write(canvas)
         if fstatus in ("uncertain", "blink_or_occluded", "lost") and fr >= init_fr:
             seen_bad += 1
             if seen_bad % stride == 0 and saved_bad < max_debug_frames:
@@ -783,12 +868,19 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
     plot_trace(times, {"raw": (rlx, GRAY), "filtered": (flx, GREEN)},
                f"Left pupil horizontal - RAW vs FILTERED ({filter_mode})",
                out_dir / "trace_raw_vs_filtered.png")
-    # HEAD-CORRECTED eye-in-head traces (raw corrected — not over-filtered; red ticks = poor/degenerate)
-    plot_trace(times, {"L": (cor_lh, GREEN), "R": (cor_rh, BLUE)},
-               "Eye-in-socket (pupil vs canthi) - HORIZONTAL (px) vs time",
+    # EYE-IN-SOCKET (canthus-relative) traces — single eye by default, both only for --eye both
+    # (raw corrected, not over-filtered; red ticks = poor/degenerate frames).
+    if show_both:
+        ch_h = {"L": (cor_lh, GREEN), "R": (cor_rh, BLUE)}
+        ch_v = {"L": (cor_lv, GREEN), "R": (cor_rv, BLUE)}
+    else:
+        e = chosen_eye or ("R" if valid_R >= valid_L else "L")
+        nm, col = ("L", GREEN) if e == "L" else ("R", BLUE)
+        ch_h = {nm: (cor_lh if e == "L" else cor_rh, col)}
+        ch_v = {nm: (cor_lv if e == "L" else cor_rv, col)}
+    plot_trace(times, ch_h, "Eye-in-socket (pupil vs canthi) - HORIZONTAL (px) vs time",
                out_dir / "trace_corrected_h.png", flags=poor_flags)
-    plot_trace(times, {"L": (cor_lv, GREEN), "R": (cor_rv, BLUE)},
-               "Eye-in-socket (pupil vs canthi) - VERTICAL (px) vs time",
+    plot_trace(times, ch_v, "Eye-in-socket (pupil vs canthi) - VERTICAL (px) vs time",
                out_dir / "trace_corrected_v.png", flags=poor_flags)
 
     def jitter(xs, ys):
@@ -806,6 +898,7 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
         "manual_corrections": tracker.corrections,
         "status_counts": counts,
         "filter": filter_mode,
+        "display_eye": (eye if (show_both or forced) else (chosen_eye or "auto")),
         "jitter_left_raw_px": jitter(rlx, rly),
         "jitter_left_filtered_px": jitter(flx, fly),
         "transform_quality_counts": q_counts,

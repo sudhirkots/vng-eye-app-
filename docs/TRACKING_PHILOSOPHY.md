@@ -1,7 +1,7 @@
 # EyeVNG Tracking Philosophy (Revised)
 
 **Status: SOURCE OF TRUTH for all tracking-related design decisions.** Where any other document
-(`PROJECT_VISION_AND_REQUIREMENTS.md`, `SYSTEM_ARCHITECTURE.md`, `IMPLEMENTATION_PLAN.md`,
+(`VISION.md`, `SYSTEM_ARCHITECTURE.md`, `IMPLEMENTATION_PLAN.md`,
 `STABLE_TRACKING.md`, `HANDOFF.md`) disagrees about how anatomy/pupils are tracked, this document
 wins. Last revised: 2026-06-25.
 

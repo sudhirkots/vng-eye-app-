@@ -19,7 +19,7 @@ what we learned**.
   keeps face points locked to anatomy through head motion; the offset preserves the user's correction).
 
 ### 2. Revised philosophy: detect once → confirm → track
-- **Did:** Dr. Kothari authored `PROJECT_VISION_AND_REQUIREMENTS.md`; we wrote `TRACKING_PHILOSOPHY.md`.
+- **Did:** Dr. Kothari authored `VISION.md` (was `PROJECT_VISION_AND_REQUIREMENTS.md`); we wrote `TRACKING_PHILOSOPHY.md`.
 - **Learned (central shift):** EyeVNG is a **tracking** system, not a per-frame detector. MediaPipe is
   a *proposal/anchor*, never the final per-frame measurement — repeated detection creates jitter that
   mimics eye movement.

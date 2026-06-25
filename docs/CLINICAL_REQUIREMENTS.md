@@ -3,7 +3,7 @@
 *This document captures the clinical reasoning behind EyeVNG design decisions. It is not a software
 architecture document — it explains **why** the software behaves the way it does. For tracking design
 see `docs/TRACKING_PHILOSOPHY.md`; for requirements/architecture see
-`PROJECT_VISION_AND_REQUIREMENTS.md` and `SYSTEM_ARCHITECTURE.md`.*
+`VISION.md` and `SYSTEM_ARCHITECTURE.md`.*
 
 ## Project Goal
 

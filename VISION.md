@@ -1,11 +1,35 @@
 # EyeVNG – Master Development Notes (Current Consensus)
 
+> # 🔑 CODE WORD: **EYEVNG**
+> One of the **two canonical EYEVNG docs** (say "EYEVNG" to pull both up):
+> **`VISION.md`** — what we're building, requirements, rules, decisions (this file).
+> **`HANDOFF.md`** — current status + running session log.
+> (`VISION.md` was renamed from the long `PROJECT_VISION_AND_REQUIREMENTS.md`.)
+
 > **Tracking design → see `docs/TRACKING_PHILOSOPHY.md`.** That document is the source of truth for
 > all tracking-related design decisions (detector-vs-tracker, template tracking, blink handling,
 > re-acquisition, statuses, confidence, overlay, honesty rules). **Clinical reasoning → see
 > `docs/CLINICAL_REQUIREMENTS.md`** (why the software behaves as it does). **What we tried + learned
 > (development journal) → `docs/DEVELOPMENT_NOTES.md`.** This file holds the overall vision,
 > requirements, and build order.
+
+## VNG Display Rules — LOCKED (Dr. Kothari, 2026-06-25)
+
+How the eye-movement trace is shown on/with the video. These are firm requirements:
+
+1. **Single eye by default.** Conjugate nystagmus on both eyes is redundant and confusing — show ONE
+   eye. Show BOTH only when the eyes differ, e.g. **internuclear ophthalmoplegia** (one eye nystagmus,
+   the other not). CLI: `--eye auto|left|right|both` (default `auto` = single best-tracked eye). The
+   CSV always keeps BOTH eyes (data integrity); this rule is about the *display* only.
+2. **Trace synced to the video** (a moving time cursor on the trace tracks playback).
+3. **No opaque band over the video.** A dark/translucent panel over the face obscures it — not allowed.
+4. **The trace must NEVER cover the eyes.** Because the source clips zoom/pan over the eyes, any
+   on-video overlay eventually lands on them. RESOLUTION: render the trace in a **dedicated strip BELOW
+   the video** (extend the canvas downward; video pixels untouched, eyes always fully visible).
+5. **Signal shown = canthus-relative ("eye-in-socket")** — pupil measured against that eye's own
+   inner+outer canthus (cancels head/"hair" movement). This is the `corrected_*` output.
+
+Implemented in `pupil_tracker.py` (`superimpose_traces`, `run`) + `app.py` (`--eye`). Uncommitted.
 
 ## Project Vision
 
