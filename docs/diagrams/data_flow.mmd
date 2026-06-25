@@ -1,0 +1,11 @@
+flowchart TD
+    A[Upload Video] --> B[Validation & Normalize]
+    B --> C[Face Detection]
+    C --> D[Eye Tracking]
+    C --> E[Head Tracking]
+    D --> F[Signal Extraction]
+    E --> F
+    F --> G[Quality Assessment]
+    G --> H[CSV Export]
+    G --> I[Overlay Video]
+    G --> J[Trace Visualization]
