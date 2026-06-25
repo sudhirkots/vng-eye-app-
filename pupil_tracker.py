@@ -258,7 +258,7 @@ def approve_interactive(frame, le, re, faces):
         items.append({"kind": "face", "name": name,
                       "x": pt[0] if on else W * 0.5, "y": pt[1] if on else H * 0.5, "r": None, "on": on})
 
-    st_ = {"sel": 0, "drag": False, "mx": 0, "my": 0}
+    st_ = {"sel": 0, "drag": False, "mx": 0, "my": 0, "mag": True}
 
     def nearest_center(ix, iy):
         best = None
@@ -303,23 +303,26 @@ def approve_interactive(frame, le, re, faces):
             else:
                 cv2.circle(disp, p, 4, col, -1)
             cv2.putText(disp, lbl, (p[0] + 6, p[1] - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.5, col, 1)
-        # magnifier inset (top-right) around the cursor for precise placement
+        # magnifier inset around the cursor — placed in the corner OPPOSITE the cursor so it never
+        # covers the point being edited (toggle with 'm')
         ix, iy = int(st_["mx"] / scale), int(st_["my"] / scale)
-        Z, rad = 4, 40
+        Z, rad = 4, 36
         x0, y0 = max(0, ix - rad), max(0, iy - rad)
         x1, y1 = min(W, ix + rad), min(H, iy + rad)
         crop = frame[y0:y1, x0:x1]
-        if crop.size:
+        if st_["mag"] and crop.size:
             mag = cv2.resize(crop, None, fx=Z, fy=Z, interpolation=cv2.INTER_NEAREST)
             cv2.drawMarker(mag, (int((ix - x0) * Z), int((iy - y0) * Z)), (0, 0, 255), cv2.MARKER_CROSS, 18, 1)
             mh, mw = mag.shape[:2]
             if mw <= DW and mh <= DH:
                 cv2.rectangle(mag, (0, 0), (mw - 1, mh - 1), (0, 0, 255), 1)
-                disp[0:mh, DW - mw:DW] = mag
+                mx0 = 0 if st_["mx"] > DW / 2 else DW - mw      # cursor right → inset left, & vice-versa
+                my0 = (DH - mh) if st_["my"] < DH / 2 else 0     # cursor top → inset bottom, & vice-versa
+                disp[my0:my0 + mh, mx0:mx0 + mw] = mag
         sel_it = items[st_["sel"]]
         sel_lbl = sel_it["name"] if sel_it["kind"] == "pupil" else FACE_CODE.get(sel_it["name"], sel_it["name"])
-        cv2.putText(disp, f"selected: {sel_lbl}   drag = move pupil   + / - = pupil size"
-                    "   d = off/on   Enter = APPROVE   q = cancel",
+        cv2.putText(disp, f"selected: {sel_lbl}   drag = move point   + / - = pupil size"
+                    "   d = off/on   m = magnifier   Enter = APPROVE   q = cancel",
                     (8, DH - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         cv2.imshow(win, disp)
         k = cv2.waitKey(20) & 0xFF
@@ -334,6 +337,8 @@ def approve_interactive(frame, le, re, faces):
                 it["r"] = max(3.0, it["r"] + (1 if k in (ord("+"), ord("=")) else -1))
         if k == ord("d"):
             items[st_["sel"]]["on"] = not items[st_["sel"]]["on"]
+        if k == ord("m"):
+            st_["mag"] = not st_["mag"]
     cv2.destroyAllWindows()
     pupils = {it["name"]: ((it["x"], it["y"], it["r"]) if it["on"] else None)
               for it in items if it["kind"] == "pupil"}

@@ -1,6 +1,26 @@
 # VNG-EYE app — Setup
 
-Run these three commands inside the `VNG-EYE app/` folder on any Windows machine with Python 3.10–3.12 installed.
+> ⚠️ **The project folder is in OneDrive, which syncs across machines — but a venv is machine-specific
+> (it hard-codes the base-Python path). A `.venv` created on one PC FAILS on another with
+> `No Python at 'C:\Users\<other-user>\...python.exe'`. So put the venv OUTSIDE OneDrive, per machine.**
+
+## Per-machine venv (do this once on each computer)
+
+```powershell
+# a local, non-synced venv at %USERPROFILE%\eyevng-venv
+python -m venv $env:USERPROFILE\eyevng-venv
+$env:USERPROFILE\eyevng-venv\Scripts\python.exe -m pip install -r "requirements.txt"
+```
+
+Fast alternative if a working `.venv` already synced in from another PC (same Python 3.12, same OS):
+create the empty venv as above, then copy `.venv\Lib\site-packages\*` into
+`%USERPROFILE%\eyevng-venv\Lib\site-packages\` (reuses the wheels, no re-download).
+
+Then always use `%USERPROFILE%\eyevng-venv\Scripts\python.exe` (NOT `.\.venv\...`). Launching the GUI:
+`Start-Process -FilePath <that python> -ArgumentList 'app.py --video "samples/<file>.mp4" --approve'`
+— quote the video path (filenames have spaces).
+
+## Legacy (single-machine) setup
 
 ```powershell
 python -m venv .venv
