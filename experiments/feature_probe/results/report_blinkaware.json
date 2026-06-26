@@ -1,0 +1,144 @@
+[
+  {
+    "clip": "fistula nystagmus.mp4",
+    "tag": "fistula",
+    "eye_detected_frames": "170/170",
+    "ear_baseline": 0.32,
+    "longest_blinkfree_run_frames": 22,
+    "clean_window_start": 88,
+    "blink_count_in_scan": 22,
+    "clean_window": {
+      "start_frame": 88,
+      "init_features": 80,
+      "iris_radius_px": 39.0,
+      "iris_brightness": 48.6,
+      "survivors": {
+        "10": 2,
+        "20": 0,
+        "30": 0
+      },
+      "survival_pct": {
+        "10": 2.5,
+        "20": 0.0,
+        "30": 0.0
+      },
+      "mean_fb_error_px": 0.191,
+      "quadrant_distribution": {
+        "temporal_upper": 19,
+        "temporal_lower": 19,
+        "nasal_upper": 25,
+        "nasal_lower": 17
+      },
+      "consensus_jitter_px": 10.96,
+      "template_jitter_px": 11.18,
+      "consensus_drift_vs_MP_px_at30": null,
+      "gap_to_MP_at30": {
+        "consensus": null,
+        "template": 20.5
+      },
+      "images": [
+        "C:\\Users\\sudhi\\AppData\\Local\\Temp\\claude\\C--Users-sudhi-OneDrive-Documents-Neurology-Talks-talks-migraine-fnd-talk\\cefb5def-a24b-4bbe-811e-7936192d6839\\scratchpad\\probe_out2\\fistula_win_+00.png",
+        "C:\\Users\\sudhi\\AppData\\Local\\Temp\\claude\\C--Users-sudhi-OneDrive-Documents-Neurology-Talks-talks-migraine-fnd-talk\\cefb5def-a24b-4bbe-811e-7936192d6839\\scratchpad\\probe_out2\\fistula_win_+10.png",
+        "C:\\Users\\sudhi\\AppData\\Local\\Temp\\claude\\C--Users-sudhi-OneDrive-Documents-Neurology-Talks-talks-migraine-fnd-talk\\cefb5def-a24b-4bbe-811e-7936192d6839\\scratchpad\\probe_out2\\fistula_win_+20.png",
+        "C:\\Users\\sudhi\\AppData\\Local\\Temp\\claude\\C--Users-sudhi-OneDrive-Documents-Neurology-Talks-talks-migraine-fnd-talk\\cefb5def-a24b-4bbe-811e-7936192d6839\\scratchpad\\probe_out2\\fistula_win_+30.png"
+      ]
+    },
+    "blink_recovery": {
+      "pre_blink_features": 80,
+      "min_during_blink": 2,
+      "recovered_after_redetect": 80
+    }
+  },
+  {
+    "clip": "2.mp4",
+    "tag": "ref2",
+    "eye_detected_frames": "169/170",
+    "ear_baseline": 0.324,
+    "longest_blinkfree_run_frames": 169,
+    "clean_window_start": 1,
+    "blink_count_in_scan": 0,
+    "clean_window": {
+      "start_frame": 1,
+      "init_features": 37,
+      "iris_radius_px": 72.4,
+      "iris_brightness": 36.5,
+      "survivors": {
+        "10": 37,
+        "20": 37,
+        "30": 37
+      },
+      "survival_pct": {
+        "10": 100.0,
+        "20": 100.0,
+        "30": 100.0
+      },
+      "mean_fb_error_px": 0.024,
+      "quadrant_distribution": {
+        "temporal_upper": 11,
+        "temporal_lower": 6,
+        "nasal_upper": 19,
+        "nasal_lower": 1
+      },
+      "consensus_jitter_px": 3.94,
+      "template_jitter_px": 4.12,
+      "consensus_drift_vs_MP_px_at30": 5.0,
+      "gap_to_MP_at30": {
+        "consensus": 5.0,
+        "template": 6.2
+      },
+      "images": [
+        "C:\\Users\\sudhi\\AppData\\Local\\Temp\\claude\\C--Users-sudhi-OneDrive-Documents-Neurology-Talks-talks-migraine-fnd-talk\\cefb5def-a24b-4bbe-811e-7936192d6839\\scratchpad\\probe_out2\\ref2_win_+00.png",
+        "C:\\Users\\sudhi\\AppData\\Local\\Temp\\claude\\C--Users-sudhi-OneDrive-Documents-Neurology-Talks-talks-migraine-fnd-talk\\cefb5def-a24b-4bbe-811e-7936192d6839\\scratchpad\\probe_out2\\ref2_win_+10.png",
+        "C:\\Users\\sudhi\\AppData\\Local\\Temp\\claude\\C--Users-sudhi-OneDrive-Documents-Neurology-Talks-talks-migraine-fnd-talk\\cefb5def-a24b-4bbe-811e-7936192d6839\\scratchpad\\probe_out2\\ref2_win_+20.png",
+        "C:\\Users\\sudhi\\AppData\\Local\\Temp\\claude\\C--Users-sudhi-OneDrive-Documents-Neurology-Talks-talks-migraine-fnd-talk\\cefb5def-a24b-4bbe-811e-7936192d6839\\scratchpad\\probe_out2\\ref2_win_+30.png"
+      ]
+    },
+    "blink_recovery": null
+  },
+  {
+    "clip": "1.mp4",
+    "tag": "lighter",
+    "eye_detected_frames": "169/170",
+    "ear_baseline": 0.275,
+    "longest_blinkfree_run_frames": 169,
+    "clean_window_start": 1,
+    "blink_count_in_scan": 0,
+    "clean_window": {
+      "start_frame": 1,
+      "init_features": 41,
+      "iris_radius_px": 44.7,
+      "iris_brightness": 79.9,
+      "survivors": {
+        "10": 18,
+        "20": 6,
+        "30": 2
+      },
+      "survival_pct": {
+        "10": 43.9,
+        "20": 14.6,
+        "30": 4.9
+      },
+      "mean_fb_error_px": 0.236,
+      "quadrant_distribution": {
+        "temporal_upper": 14,
+        "temporal_lower": 7,
+        "nasal_upper": 15,
+        "nasal_lower": 5
+      },
+      "consensus_jitter_px": 36.6,
+      "template_jitter_px": 34.01,
+      "consensus_drift_vs_MP_px_at30": null,
+      "gap_to_MP_at30": {
+        "consensus": null,
+        "template": 14.5
+      },
+      "images": [
+        "C:\\Users\\sudhi\\AppData\\Local\\Temp\\claude\\C--Users-sudhi-OneDrive-Documents-Neurology-Talks-talks-migraine-fnd-talk\\cefb5def-a24b-4bbe-811e-7936192d6839\\scratchpad\\probe_out2\\lighter_win_+00.png",
+        "C:\\Users\\sudhi\\AppData\\Local\\Temp\\claude\\C--Users-sudhi-OneDrive-Documents-Neurology-Talks-talks-migraine-fnd-talk\\cefb5def-a24b-4bbe-811e-7936192d6839\\scratchpad\\probe_out2\\lighter_win_+10.png",
+        "C:\\Users\\sudhi\\AppData\\Local\\Temp\\claude\\C--Users-sudhi-OneDrive-Documents-Neurology-Talks-talks-migraine-fnd-talk\\cefb5def-a24b-4bbe-811e-7936192d6839\\scratchpad\\probe_out2\\lighter_win_+20.png",
+        "C:\\Users\\sudhi\\AppData\\Local\\Temp\\claude\\C--Users-sudhi-OneDrive-Documents-Neurology-Talks-talks-migraine-fnd-talk\\cefb5def-a24b-4bbe-811e-7936192d6839\\scratchpad\\probe_out2\\lighter_win_+30.png"
+      ]
+    },
+    "blink_recovery": null
+  }
+]

@@ -1,0 +1,98 @@
+[
+  {
+    "clip": "1.mp4",
+    "brightness": 69.1,
+    "contrast_std": 33.4,
+    "texture_varLap": 1042.9,
+    "iris_radius_px": 47.4,
+    "init_features": 29,
+    "feature_density_per1000px2": 4.11,
+    "surv10": 1,
+    "surv15": 0,
+    "mean_fb_err_px": 0.427
+  },
+  {
+    "clip": "2.mp4",
+    "brightness": 28.1,
+    "contrast_std": 24.7,
+    "texture_varLap": 416.7,
+    "iris_radius_px": 72.5,
+    "init_features": 21,
+    "feature_density_per1000px2": 1.27,
+    "surv10": 21,
+    "surv15": 21,
+    "mean_fb_err_px": 0.025
+  },
+  {
+    "clip": "3.mp4",
+    "brightness": 33.2,
+    "contrast_std": 32.9,
+    "texture_varLap": 558.7,
+    "iris_radius_px": 90.0,
+    "init_features": 80,
+    "feature_density_per1000px2": 3.15,
+    "surv10": 78,
+    "surv15": 56,
+    "mean_fb_err_px": 0.041
+  },
+  {
+    "clip": "fistula nystagmus.mp4",
+    "brightness": 33.1,
+    "contrast_std": 4.6,
+    "texture_varLap": 21.6,
+    "iris_radius_px": 38.8,
+    "init_features": 93,
+    "feature_density_per1000px2": 19.71,
+    "surv10": 0,
+    "surv15": 0,
+    "mean_fb_err_px": 0.549
+  },
+  {
+    "clip": "gaze-evoked nystagmus in pontine glioma.mp4",
+    "brightness": 73.4,
+    "contrast_std": 30.3,
+    "texture_varLap": 289.0,
+    "iris_radius_px": 51.2,
+    "init_features": 51,
+    "feature_density_per1000px2": 6.2,
+    "surv10": 46,
+    "surv15": 43,
+    "mean_fb_err_px": 0.122
+  },
+  {
+    "clip": "gaze-evoked nystagmus-1.mp4",
+    "brightness": 25.5,
+    "contrast_std": 25.2,
+    "texture_varLap": 1465.4,
+    "iris_radius_px": 65.3,
+    "init_features": 20,
+    "feature_density_per1000px2": 1.49,
+    "surv10": 5,
+    "surv15": 5,
+    "mean_fb_err_px": 0.042
+  },
+  {
+    "clip": "nystagmus at rest to left and head impulse positive in right vestibular neuritis.mp4",
+    "brightness": 31.6,
+    "contrast_std": 29.3,
+    "texture_varLap": 655.3,
+    "iris_radius_px": 84.7,
+    "init_features": 120,
+    "feature_density_per1000px2": 5.33,
+    "surv10": 69,
+    "surv15": 10,
+    "mean_fb_err_px": 0.137
+  },
+  {
+    "clip": "nystagmus at rest to left in right vestibular neuritis.mp4",
+    "brightness": 111.1,
+    "contrast_std": 22.4,
+    "texture_varLap": 399.0,
+    "iris_radius_px": 13.9,
+    "init_features": 8,
+    "feature_density_per1000px2": 13.15,
+    "surv10": 8,
+    "surv15": 8,
+    "mean_fb_err_px": 0.024
+  }
+]
