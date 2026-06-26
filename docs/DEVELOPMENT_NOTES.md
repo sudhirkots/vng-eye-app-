@@ -3,6 +3,11 @@
 Running journal of what we tried, what we changed, and what we learned — so the reasoning isn't lost.
 Durable design rules live in `TRACKING_PHILOSOPHY.md`; this is the "how we got there" record.
 
+> **⚠️ TERMINOLOGY UPDATE (2026-06-26): EyeVNG V1 is now an IRIS tracker.** Code was renamed pupil→iris
+> (`pupil_tracker.py`→`iris_tracker.py`, `pupil_tracking.py`→`iris_tracking.py`, `PupilDetector`→`IrisDetector`,
+> `StableTracker`→`IrisTracker`, `refine_pupil`→`refine_iris`, `pupil_contrast`→`iris_contrast`; CSV/JSON keys
+> likewise). **The dated entries below predate the rename and use the old names — preserved as project history.**
+
 ---
 
 ## Session 2026-06-25 — from per-frame detection to a confirmed, head-referenced tracker

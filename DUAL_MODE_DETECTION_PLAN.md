@@ -3,6 +3,10 @@
 Status: **PARTIALLY BUILT (Phase 1 done), THEN PAUSED 2026-06-24.** Builds on `SYSTEM_ARCHITECTURE.md`
 and the V1 `IMPLEMENTATION_PLAN.md`.
 
+> **Note:** this is the **deferred** IR-Frenzel-goggle path, NOT V1. On IR goggle footage the device
+> images the **dark pupil** directly, so "pupil detection" here is the correct anatomical term and is
+> intentionally retained — it is unrelated to the V1 iris tracker.
+
 > ⚠️ **SCOPE LOCKED — face-based smartphone primary-gaze videos only (Dr. Kothari, 2026-06-24).**
 > The current product is **face-based primary-gaze tracking + verification**. **Mode B / the IR
 > Frenzel goggle (eyes-only) path is explicitly DEFERRED to a separate later phase** — this whole

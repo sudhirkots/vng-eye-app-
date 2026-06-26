@@ -1,5 +1,12 @@
 # VNG-EYE app — session handoff
 
+> **⚠️ TERMINOLOGY UPDATE (2026-06-26): EyeVNG V1 is now an IRIS tracker.** Code was renamed pupil→iris —
+> `pupil_tracker.py`→`iris_tracker.py`, `src/core/pupil_tracking.py`→`src/core/iris_tracking.py`,
+> `PupilDetector`→`IrisDetector`, `StableTracker`→`IrisTracker`, `refine_pupil`→`refine_iris`,
+> `pupil_contrast`→`iris_contrast`; CSV `*_pupil_x/y/radius`→`*_iris_center_x/y` + `*_iris_radius`;
+> approved-landmarks JSON key `"pupils"`→`"iris"`. **The dated entries below predate the rename and use
+> the old names — preserved as project history.**
+
 > # 🔑 CODE WORD: **EYEVNG**
 > One of the **two canonical EYEVNG docs** (say "EYEVNG" to pull both up):
 > **`VISION.md`** — what we're building, requirements, rules, decisions.

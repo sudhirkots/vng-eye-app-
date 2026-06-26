@@ -1,8 +1,8 @@
-"""Stable pupil tracking pipeline (see STABLE_TRACKING.md).
+"""Stable iris tracking pipeline (see STABLE_TRACKING.md).
 
-    python pupil_tracker.py <video> [--output-dir outputs] [--auto-confirm] [--review]
+    python iris_tracker.py <video> [--output-dir outputs] [--auto-confirm] [--review]
 
-Default: interactive pupil-CIRCLE editor (drag centre, resize radius, per eye),
+Default: interactive iris-CIRCLE editor (drag centre, resize radius, per eye),
 then continuous template tracking with MediaPipe as backup only.
 --auto-confirm : accept the auto-detected circles without a GUI (batch / headless).
 --review       : open the low-confidence review screen for an existing run.
@@ -22,7 +22,7 @@ import numpy as np
 from dataclasses import replace
 
 from src.core.filters import PointFilter
-from src.core.pupil_tracking import (APERTURE, FaceLandmarkTracker, PupilDetector, StableTracker,
+from src.core.iris_tracking import (APERTURE, FaceLandmarkTracker, IrisDetector, IrisTracker,
                                      Track, frame_status, select_init_frame)
 
 APERTURE_NAMES = tuple(APERTURE.keys())   # the 8 eye-aperture landmark names (4 per eye)
@@ -59,7 +59,7 @@ OVERLAY_MAX_W = 960
 
 # ----------------------------------------------------------------------------- circle editor
 def edit_circles_gui(frame, le, re):
-    """Let the user drag the centre and resize the radius of each pupil circle.
+    """Let the user drag the centre and resize the radius of each iris circle.
     Controls: drag = move centre, mouse wheel or [ ] = radius -/+, r = reset,
     x = disable this eye (one-eye analysis), Enter = accept, q = cancel.
     Returns {"L": (x,y,r) or None, "R": (x,y,r) or None}."""
@@ -91,7 +91,7 @@ def edit_circles_gui(frame, le, re):
                 state[key][2] = max(3.0, state[key][2] + (1 if cv2.getMouseWheelDelta(flags) > 0 else -1))
         return cb
 
-    print("Edit pupil circles: drag=centre, wheel/[ ]=radius, r=reset, x=disable eye, Enter=accept, q=cancel.")
+    print("Edit iris circles: drag=centre, wheel/[ ]=radius, r=reset, x=disable eye, Enter=accept, q=cancel.")
     while True:
         active = None
         for key, e in (("L", le), ("R", re)):
@@ -144,24 +144,24 @@ FACE_CODE = {"nose_bridge_mid": "Nb", "nose_tip": "Nt", "cheek_R": "ChR", "cheek
 
 
 def propose_init(video_path, output_dir="outputs"):
-    """Mark what the software thinks are the pupils AND the facial landmarks, and
+    """Mark what the software thinks are the iris AND the facial landmarks, and
     save a review image so the user can confirm/correct before tracking (anatomical
-    confirmation, step 1). Pupil and iris are drawn as concentric circles so the user
-    can verify concentricity; pupil darkness contrast is reported."""
+    confirmation, step 1). Iris and iris are drawn as concentric circles so the user
+    can verify concentricity; iris darkness contrast is reported."""
     video_path = Path(video_path)
-    detector = PupilDetector()
+    detector = IrisDetector()
     init = select_init_frame(detector, video_path)
     if init is None:
         raise SystemExit("No frame with a confidently detected eye — cannot initialise.")
     fr, frame, le, re = init
     # fresh detector: select_init_frame advanced this detector's MediaPipe tracking state, so
     # re-processing the (earlier) init frame with it can fail — a clean instance detects reliably.
-    faces = PupilDetector().face_landmarks(frame) or {}
+    faces = IrisDetector().face_landmarks(frame) or {}
     out_dir = Path(output_dir) / (video_path.stem + "_tracked")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     vis = frame.copy()
-    # concentric iris (cyan, thin) + pupil (green) so concentricity is visible
+    # concentric iris (cyan, thin) + iris (green) so concentricity is visible
     for e in (le, re):
         if e.detected:
             c = (int(e.x), int(e.y))
@@ -182,7 +182,7 @@ def propose_init(video_path, output_dir="outputs"):
 
     s = 1100 / frame.shape[1]
     full = cv2.resize(vis, (int(frame.shape[1] * s), int(frame.shape[0] * s)))
-    cv2.putText(full, f"Init frame {fr} - confirm pupils (green) + face landmarks (amber)",
+    cv2.putText(full, f"Init frame {fr} - confirm iris (green) + face landmarks (amber)",
                 (10, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
     crops = []
@@ -196,9 +196,9 @@ def propose_init(video_path, output_dir="outputs"):
         cx, cy = int((e.x - x0) * 4), int((e.y - y0) * 4)
         if e.iris_radius:
             cv2.circle(big, (cx, cy), int(e.iris_radius * 4), CYAN, 1)   # iris (concentric)
-        cv2.circle(big, (cx, cy), int(e.radius * 4), GREEN, 2)           # pupil
+        cv2.circle(big, (cx, cy), int(e.radius * 4), GREEN, 2)           # iris
         cv2.circle(big, (cx, cy), 3, GREEN, -1)
-        cv2.putText(big, f"{key} pupil r={e.radius:.0f} contrast={e.pupil_contrast:.2f}",
+        cv2.putText(big, f"{key} iris r={e.radius:.0f} contrast={e.iris_contrast:.2f}",
                     (8, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.6, GREEN, 2)
         crops.append(big)
 
@@ -220,11 +220,11 @@ def propose_init(video_path, output_dir="outputs"):
     path = out_dir / "init_proposal.png"
     cv2.imwrite(str(path), composed)
 
-    print(f"Init frame {fr}: (concentricity = pupil should sit at the iris centre; contrast = dark pupil)")
+    print(f"Init frame {fr}: (concentricity = iris should sit at the iris centre; contrast = dark iris)")
     for key, e in (("L", le), ("R", re)):
-        print(f"  pupil {key}: " + ("not detected" if not e.detected else
-              f"centre=({e.x:.0f},{e.y:.0f}) pupil_r={e.radius:.0f} iris_r={e.iris_radius:.0f} "
-              f"contrast={e.pupil_contrast:.2f}" + ("  [LOW CONTRAST — check]" if e.pupil_contrast < 0.08 else "")))
+        print(f"  iris {key}: " + ("not detected" if not e.detected else
+              f"centre=({e.x:.0f},{e.y:.0f}) iris_r={e.radius:.0f} iris_r={e.iris_radius:.0f} "
+              f"contrast={e.iris_contrast:.2f}" + ("  [LOW CONTRAST — check]" if e.iris_contrast < 0.08 else "")))
     print("  face landmarks: " + ", ".join(f"{FACE_CODE[k]}" for k, v in faces.items() if v is not None))
     if unavailable:
         print("  unavailable (off-frame): " + ", ".join(FACE_CODE.get(u, u) for u in unavailable))
@@ -244,10 +244,10 @@ def load_approved(output_dir, video_path):
 
 def approve_interactive(frame, le, re, faces):
     """Interactive Stage 0 confirmation screen. Shows the frame with the proposed
-    pupils (green circles) and facial landmarks (amber dots), labelled. The user
-    drags any point to the correct spot, resizes a pupil with the wheel or [ ],
+    iris (green circles) and facial landmarks (amber dots), labelled. The user
+    drags any point to the correct spot, resizes a iris with the wheel or [ ],
     toggles a point off/on with 'd' (unavailable), then presses Enter to APPROVE.
-    A magnifier follows the cursor for precise placement. Returns (pupils, faces)."""
+    A magnifier follows the cursor for precise placement. Returns (iris, faces)."""
     H, W = frame.shape[:2]
     scale = min(1.0, 1200.0 / W)
     DW, DH = int(W * scale), int(H * scale)
@@ -255,9 +255,9 @@ def approve_interactive(frame, le, re, faces):
     items = []
     for key, e, dx in (("L", le, 0.35), ("R", re, 0.65)):
         if e.detected:
-            items.append({"kind": "pupil", "name": key, "x": e.x, "y": e.y, "r": max(4.0, e.radius), "on": True})
+            items.append({"kind": "iris", "name": key, "x": e.x, "y": e.y, "r": max(4.0, e.radius), "on": True})
         else:
-            items.append({"kind": "pupil", "name": key, "x": W * dx, "y": H * 0.5, "r": 15.0, "on": False})
+            items.append({"kind": "iris", "name": key, "x": W * dx, "y": H * 0.5, "r": 15.0, "on": False})
     for name, pt in faces.items():
         on = pt is not None
         items.append({"kind": "face", "name": name,
@@ -294,15 +294,15 @@ def approve_interactive(frame, le, re, faces):
         disp = cv2.resize(frame, (DW, DH))
         for i, it in enumerate(items):
             sel = (i == st_["sel"])
-            col = (0, 255, 255) if sel else ((0, 200, 0) if it["kind"] == "pupil" else (0, 165, 255))
+            col = (0, 255, 255) if sel else ((0, 200, 0) if it["kind"] == "iris" else (0, 165, 255))
             if not it["on"]:
                 col = (130, 130, 130)
             p = (int(it["x"] * scale), int(it["y"] * scale))
-            lbl = (f"{it['name']} r{int(it['r'])}" if it["kind"] == "pupil"
+            lbl = (f"{it['name']} r{int(it['r'])}" if it["kind"] == "iris"
                    else FACE_CODE.get(it["name"], it["name"]))
             if not it["on"]:
                 lbl += " OFF"
-            if it["kind"] == "pupil":
+            if it["kind"] == "iris":
                 cv2.circle(disp, p, max(3, int((it["r"] or 10) * scale)), col, 2)
                 cv2.circle(disp, p, 2, col, -1)
             else:
@@ -325,8 +325,8 @@ def approve_interactive(frame, le, re, faces):
                 my0 = (DH - mh) if st_["my"] < DH / 2 else 0     # cursor top → inset bottom, & vice-versa
                 disp[my0:my0 + mh, mx0:mx0 + mw] = mag
         sel_it = items[st_["sel"]]
-        sel_lbl = sel_it["name"] if sel_it["kind"] == "pupil" else FACE_CODE.get(sel_it["name"], sel_it["name"])
-        cv2.putText(disp, f"selected: {sel_lbl}   drag = move point   + / - = pupil size"
+        sel_lbl = sel_it["name"] if sel_it["kind"] == "iris" else FACE_CODE.get(sel_it["name"], sel_it["name"])
+        cv2.putText(disp, f"selected: {sel_lbl}   drag = move point   + / - = iris size"
                     "   d = off/on   m = magnifier   Enter = APPROVE   q = cancel",
                     (8, DH - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         cv2.imshow(win, disp)
@@ -338,18 +338,18 @@ def approve_interactive(frame, le, re, faces):
             raise SystemExit("Cancelled — nothing approved.")
         if k in (ord("-"), ord("+"), ord("=")):
             it = items[st_["sel"]]
-            if it["kind"] == "pupil":
+            if it["kind"] == "iris":
                 it["r"] = max(3.0, it["r"] + (1 if k in (ord("+"), ord("=")) else -1))
         if k == ord("d"):
             items[st_["sel"]]["on"] = not items[st_["sel"]]["on"]
         if k == ord("m"):
             st_["mag"] = not st_["mag"]
     cv2.destroyAllWindows()
-    pupils = {it["name"]: ((it["x"], it["y"], it["r"]) if it["on"] else None)
-              for it in items if it["kind"] == "pupil"}
+    iris = {it["name"]: ((it["x"], it["y"], it["r"]) if it["on"] else None)
+              for it in items if it["kind"] == "iris"}
     faces_out = {it["name"]: ((it["x"], it["y"]) if it["on"] else None)
                  for it in items if it["kind"] == "face"}
-    return pupils, faces_out
+    return iris, faces_out
 
 
 def approve(video_path, output_dir="outputs", auto=False):
@@ -357,14 +357,14 @@ def approve(video_path, output_dir="outputs", auto=False):
     save approved_landmarks.json. Tracking refuses to run until this exists.
     auto=True accepts the proposal without a GUI (headless)."""
     video_path = Path(video_path)
-    detector = PupilDetector()
+    detector = IrisDetector()
     init = select_init_frame(detector, video_path)
     if init is None:
         raise SystemExit("No frame with a confidently detected eye — cannot initialise.")
     fr, frame, le, re = init
     # fresh detector: select_init_frame advanced this detector's MediaPipe tracking state, so
     # re-processing the (earlier) init frame with it can fail — a clean instance detects reliably.
-    faces_raw = PupilDetector().face_landmarks(frame) or {}
+    faces_raw = IrisDetector().face_landmarks(frame) or {}
     faces = apply_landmark_calibration(faces_raw)   # pre-correct toward the clinician's learned placement
     detected = {"L": (le.x, le.y, le.radius) if le.detected else None,
                 "R": (re.x, re.y, re.radius) if re.detected else None}
@@ -372,9 +372,9 @@ def approve(video_path, output_dir="outputs", auto=False):
     if auto:
         confirmed = detected
         faces_out = faces
-        print("--auto-approve: accepting the proposed pupils + face landmarks without review.")
+        print("--auto-approve: accepting the proposed iris + face landmarks without review.")
     else:
-        print("Stage 0: drag points to correct them, wheel/[ ] resize pupils, d=off/on, Enter=APPROVE.")
+        print("Stage 0: drag points to correct them, wheel/[ ] resize iris, d=off/on, Enter=APPROVE.")
         confirmed, faces_out = approve_interactive(frame, le, re, faces)
         # LEARN: fold the clinician's corrections (vs the RAW MediaPipe proposal) into the calibration
         learned = update_calibration(faces_out, faces_raw)
@@ -393,7 +393,7 @@ def approve(video_path, output_dir="outputs", auto=False):
         "video": str(video_path), "resolution": f"{w}x{h}", "fps": round(fps, 2),
         "init_frame_number": fr, "approved": True,
         "approved_at": datetime.datetime.now().isoformat(timespec="seconds"),
-        "pupils": {k: ({"x": round(v[0], 2), "y": round(v[1], 2), "radius": round(v[2], 2)} if v else None)
+        "iris": {k: ({"x": round(v[0], 2), "y": round(v[1], 2), "radius": round(v[2], 2)} if v else None)
                    for k, v in confirmed.items()},
         "face_landmarks": {name: ({"x": round(p[0], 2), "y": round(p[1], 2)} if p else None)
                            for name, p in faces_out.items()},
@@ -406,8 +406,8 @@ def approve(video_path, output_dir="outputs", auto=False):
 
 
 # ----------------------------------------------------------------------------- overlay & plots
-def draw_overlay(frame, scale, lt: Track, rt: Track, fstatus, fr, t, face_tracks=None, raw_pupils=None):
-    """lt/rt carry the FILTERED pupil centres (main markers). raw_pupils = [(x,y),...]
+def draw_overlay(frame, scale, lt: Track, rt: Track, fstatus, fr, t, face_tracks=None, raw_iris=None):
+    """lt/rt carry the FILTERED iris centres (main markers). raw_iris = [(x,y),...]
     are drawn as small faint markers so the raw vs filtered difference is visible."""
     ow, oh = int(frame.shape[1] * scale), int(frame.shape[0] * scale)
     vis = cv2.resize(frame, (ow, oh))
@@ -417,8 +417,8 @@ def draw_overlay(frame, scale, lt: Track, rt: Track, fstatus, fr, t, face_tracks
         if tr.x is not None:
             cv2.circle(vis, (int(tr.x * scale), int(tr.y * scale)), 3,
                        STATUS_COLOR.get(tr.status, AMBER), -1)
-    # faint RAW pupil markers (so you can see what the filter is removing)
-    for rp in (raw_pupils or []):
+    # faint RAW iris markers (so you can see what the filter is removing)
+    for rp in (raw_iris or []):
         if rp and rp[0] is not None:
             cv2.drawMarker(vis, (int(rp[0] * scale), int(rp[1] * scale)), (170, 170, 170),
                            cv2.MARKER_CROSS, 9, 1)
@@ -427,10 +427,10 @@ def draw_overlay(frame, scale, lt: Track, rt: Track, fstatus, fr, t, face_tracks
         if tr.x is not None:
             p = (int(tr.x * scale), int(tr.y * scale))
             rad = int((tr.radius or 10) * scale)
-            cv2.circle(vis, p, max(3, rad), col, 2)      # tracked pupil CIRCLE
+            cv2.circle(vis, p, max(3, rad), col, 2)      # tracked iris CIRCLE
             cv2.circle(vis, p, 2, col, -1)               # centre point
         elif tr.raw_x is not None and tr.status in ("blink_or_occluded", "uncertain"):
-            # INVALID frame (blink/occlusion/jump): show where MediaPipe thought the pupil was, as a
+            # INVALID frame (blink/occlusion/jump): show where MediaPipe thought the iris was, as a
             # BLUE cross — explicitly NOT a confident green circle. Position is not reported as valid.
             p = (int(tr.raw_x * scale), int(tr.raw_y * scale))
             cv2.drawMarker(vis, p, BLUE, cv2.MARKER_TILTED_CROSS, 14, 2)
@@ -559,7 +559,7 @@ def render_trace_panel(times, lx, rx, t_now, width, height=220, window=8.0):
                 prev = p
         cv2.line(img, (X(t_now), 0), (X(t_now), height), (0, 0, 255), 1)   # cursor
     cv2.line(img, (0, 0), (width - 1, 0), (0, 0, 0), 1)
-    cv2.putText(img, f"eye-in-socket: pupil vs canthi, horizontal  (L green / R blue)  last {window:.0f}s",
+    cv2.putText(img, f"eye-in-socket: iris vs canthi, horizontal  (L green / R blue)  last {window:.0f}s",
                 (6, 13), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 0, 0), 1)
     return img
 
@@ -622,16 +622,16 @@ HEAD_REF_LANDMARKS = ("nose_bridge_mid", "nose_tip", "outer_canthus_L", "outer_c
 
 class HeadStabilizer:
     """Eye-in-head: remove head motion via an affine transform fit from the head-reference
-    landmarks (nose + eye corners) back to their init positions; the pupil expressed in that
+    landmarks (nose + eye corners) back to their init positions; the iris expressed in that
     frame is the eye movement. TIERED quality, not hard rejection — only DEGENERATE transforms
     are rejected (too few landmarks, NaN, impossible scale, or an impossible per-frame jump in
     scale/rotation/translation that no real head can make). Everything else is kept with a
     quality flag (good/fair/poor) + residual + landmark count, so the trace stays continuous and
-    spikes can be attributed to transform quality vs pupil-tracking error."""
+    spikes can be attributed to transform quality vs iris-tracking error."""
 
-    def __init__(self, init_face, init_pupil, frame_w):
+    def __init__(self, init_face, init_iris, frame_w):
         self.init_face = init_face            # {name: (x, y)}
-        self.init_pupil = init_pupil          # {"L": (x, y), "R": (x, y)}
+        self.init_iris = init_iris          # {"L": (x, y), "R": (x, y)}
         self.frame_w = float(frame_w)
         self.prev = None                      # (scale, rot, tx, ty) of last accepted transform
 
@@ -665,24 +665,24 @@ class HeadStabilizer:
         self.prev = (sx, rot, tx, ty)
         return m, quality, residual, n_used
 
-    def correct(self, m, pupil_xy, eye):
-        ip = self.init_pupil[eye]
-        if m is None or pupil_xy[0] is None or ip[0] is None:
+    def correct(self, m, iris_xy, eye):
+        ip = self.init_iris[eye]
+        if m is None or iris_xy[0] is None or ip[0] is None:
             return None, None
-        sx = m[0, 0] * pupil_xy[0] + m[0, 1] * pupil_xy[1] + m[0, 2]
-        sy = m[1, 0] * pupil_xy[0] + m[1, 1] * pupil_xy[1] + m[1, 2]
+        sx = m[0, 0] * iris_xy[0] + m[0, 1] * iris_xy[1] + m[0, 2]
+        sy = m[1, 0] * iris_xy[0] + m[1, 1] * iris_xy[1] + m[1, 2]
         return float(sx - ip[0]), float(sy - ip[1])
 
 
-def canthus_relative(pupil, inner, outer):
-    """Eye-in-socket position: the pupil expressed relative to this eye's own medial (inner) and
+def canthus_relative(iris, inner, outer):
+    """Eye-in-socket position: the iris expressed relative to this eye's own medial (inner) and
     lateral (outer) canthus. Origin = the canthi midpoint; horizontal axis = inner→outer corner
     (so it follows head tilt); h = displacement along that axis, v = perpendicular, in pixels.
     Because the canthi move WITH the head, this cancels head/"hair" movement locally and leaves only
-    the pupil's movement within the eye — the nystagmus. Returns (h, v) or (None, None)."""
-    if pupil[0] is None or inner is None or outer is None:
+    the iris's movement within the eye — the nystagmus. Returns (h, v) or (None, None)."""
+    if iris[0] is None or inner is None or outer is None:
         return None, None
-    inner = np.array(inner, float); outer = np.array(outer, float); p = np.array(pupil, float)
+    inner = np.array(inner, float); outer = np.array(outer, float); p = np.array(iris, float)
     axis = outer - inner
     length = float(np.hypot(axis[0], axis[1]))
     if length < 1.0:
@@ -695,25 +695,25 @@ def canthus_relative(pupil, inner, outer):
     return float(np.dot(vec, ux)), float(np.dot(vec, uy))
 
 
-def eye_local(pupil, inner, outer, upper, lower):
-    """Pupil position in EYE-LOCAL (eye-aperture) coordinates — the current clinical trace. Uses only
+def eye_local(iris, inner, outer, upper, lower):
+    """Iris position in EYE-LOCAL (eye-aperture) coordinates — the current clinical trace. Uses only
     this eye's own four aperture corners, so it is inherently independent of head/camera movement (no
     face/head landmarks needed). Convention:
         x: 0 = inner canthus  →  1 = outer canthus   (projection on the inner→outer axis)
         y: 0 = upper margin   →  1 = lower margin     (projection on the upper→lower axis)
     0.5 ≈ centred. Values may run slightly outside [0,1] at gaze extremes. Returns (x, y); either is
-    None if its landmark pair is missing/degenerate or the pupil is invalid (blink)."""
-    if not pupil or pupil[0] is None:
+    None if its landmark pair is missing/degenerate or the iris is invalid (blink)."""
+    if not iris or iris[0] is None:
         return None, None
 
-    def proj(a, b):                          # normalised projection of pupil onto axis a→b (a=0, b=1)
+    def proj(a, b):                          # normalised projection of iris onto axis a→b (a=0, b=1)
         if a is None or b is None:
             return None
         ax, ay = b[0] - a[0], b[1] - a[1]
         L2 = ax * ax + ay * ay
         if L2 < 1.0:
             return None
-        return ((pupil[0] - a[0]) * ax + (pupil[1] - a[1]) * ay) / L2
+        return ((iris[0] - a[0]) * ax + (iris[1] - a[1]) * ay) / L2
 
     return proj(inner, outer), proj(upper, lower)
 
@@ -837,7 +837,7 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
             'Stage 0 not complete — landmarks not approved. Approve first:\n'
             f'    python app.py --video "{video_path}" --approve')
     init_fr = int(approved["init_frame_number"])
-    Lp, Rp = approved["pupils"]["L"], approved["pupils"]["R"]
+    Lp, Rp = approved["iris"]["L"], approved["iris"]["R"]
     L = (Lp["x"], Lp["y"], Lp["radius"]) if Lp else None
     R = (Rp["x"], Rp["y"], Rp["radius"]) if Rp else None
     if not L and not R:
@@ -846,7 +846,7 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
     interocular = abs(R[0] - L[0]) if (L and R) else (L or R)[2] * 6.0
     print(f"Tracking from approved_landmarks.json (init frame {init_fr}).")
 
-    detector = PupilDetector()
+    detector = IrisDetector()
     dbg_dir = out_dir / "debug_frames"
     dbg_dir.mkdir(parents=True, exist_ok=True)
 
@@ -861,7 +861,7 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
     init_gray = cv2.cvtColor(init_frame, cv2.COLOR_BGR2GRAY) if ok else np.zeros((height, width), np.uint8)
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
     # IRIS template size: the tracked object is the whole iris, so size the template to the IRIS radius
-    # (from MediaPipe at the init frame), not the small pupil — picked per eye by nearest iris centre.
+    # (from MediaPipe at the init frame), not the small iris — picked per eye by nearest iris centre.
     _, le0, re0 = detector.detect(init_frame) if ok else (False, None, None)
     def _iris_r(center, fallback):
         cands = [(o.single_x, o.single_y, o.iris_radius) for o in (le0, re0)
@@ -872,7 +872,7 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
         return float(min(cands, key=lambda c: (c[0] - cx) ** 2 + (c[1] - cy) ** 2)[2])
     lr = _iris_r((L[0], L[1]) if L else None, L[2] if L else None)
     rr = _iris_r((R[0], R[1]) if R else None, R[2] if R else None)
-    tracker = StableTracker(init_gray, (L[0], L[1]) if L else None, (R[0], R[1]) if R else None,
+    tracker = IrisTracker(init_gray, (L[0], L[1]) if L else None, (R[0], R[1]) if R else None,
                             lr, rr, interocular)
     face_appr = approved.get("face_landmarks") or {}
     init_face_mp = (detector.face_landmarks(init_frame) or {}) if (face_appr and ok) else {}
@@ -898,15 +898,15 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
     cw.writerow(["frame_number", "timestamp_ms", "time_sec",
                  # raw_* = always the detected centre (preserved, incl. blinks); valid_* = blank during
                  # blink/occlusion/jump (never invented). Interpret eye movement from valid_*, not raw_*.
-                 "raw_left_pupil_x", "raw_left_pupil_y", "raw_right_pupil_x", "raw_right_pupil_y",
-                 "valid_left_pupil_x", "valid_left_pupil_y", "valid_right_pupil_x", "valid_right_pupil_y",
-                 "filtered_left_pupil_x", "filtered_left_pupil_y",
-                 "filtered_right_pupil_x", "filtered_right_pupil_y",
+                 "raw_left_iris_center_x", "raw_left_iris_center_y", "raw_right_iris_center_x", "raw_right_iris_center_y",
+                 "valid_left_iris_center_x", "valid_left_iris_center_y", "valid_right_iris_center_x", "valid_right_iris_center_y",
+                 "filtered_left_iris_center_x", "filtered_left_iris_center_y",
+                 "filtered_right_iris_center_x", "filtered_right_iris_center_y",
                  # EYE-LOCAL (clinical) coords: x 0=inner→1=outer canthus, y 0=upper→1=lower margin
                  "left_eye_local_x", "left_eye_local_y",
                  "right_eye_local_x", "right_eye_local_y",
                  "aperture_quality", "transform_residual_px", "landmark_count_used",
-                 "left_pupil_radius", "right_pupil_radius",
+                 "left_iris_radius", "right_iris_radius",
                  "tracking_status_left", "tracking_status_right",
                  "artifact_type_left", "artifact_type_right",
                  "ear_left", "ear_right",
@@ -921,10 +921,10 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
             hdr += [f"{n}_x", f"{n}_y", f"{n}_status"]
         fcw.writerow(hdr)
 
-    # head-motion correction reference (the user-approved init landmarks/pupils)
+    # head-motion correction reference (the user-approved init landmarks/iris)
     init_face_pts = {n: (v["x"], v["y"]) for n, v in face_appr.items() if v}
-    init_pupil = {"L": (L[0], L[1]) if L else (None, None), "R": (R[0], R[1]) if R else (None, None)}
-    stabilizer = HeadStabilizer(init_face_pts, init_pupil, width)
+    init_iris = {"L": (L[0], L[1]) if L else (None, None), "R": (R[0], R[1]) if R else (None, None)}
+    stabilizer = HeadStabilizer(init_face_pts, init_iris, width)
 
     times = []
     rlx, rly, rrx, rry = [], [], [], []      # RAW left/right x/y (image space)
@@ -982,31 +982,31 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
             face_tracks = face_tracker.step(gray, face_backup)
         cur_face = {n: (ftr.x, ftr.y) for n, ftr in face_tracks.items() if ftr.x is not None}
 
-        # FILTERED image-space pupil (for the image-space trace); raw kept separately.
+        # FILTERED image-space iris (for the image-space trace); raw kept separately.
         flx_, fly_ = pf["L"](lt.x, lt.y, t)
         frx_, fry_ = pf["R"](rt.x, rt.y, t)
-        # HEAD-CORRECTED eye-in-head from the RAW pupil. Tiered transform quality: only degenerate
+        # HEAD-CORRECTED eye-in-head from the RAW iris. Tiered transform quality: only degenerate
         # transforms are rejected (gap); imperfect ones are kept + flagged. Corrected trace is NOT
         # over-filtered (raw corrected) so nystagmus beats are preserved.
         def _pt(name):
             tr = face_tracks.get(name)
             return (tr.x, tr.y) if tr and tr.x is not None else None
 
-        # EYE-LOCAL coordinates — THE clinical trace: pupil position WITHIN this eye's aperture box
+        # EYE-LOCAL coordinates — THE clinical trace: iris position WITHIN this eye's aperture box
         # (inner/outer canthus + upper/lower margin). Head/frame independent; uses NO face/head pose.
-        # Built from the VALID pupil (lt.x/y) so blink frames stay gaps. x: 0=inner→1=outer canthus;
+        # Built from the VALID iris (lt.x/y) so blink frames stay gaps. x: 0=inner→1=outer canthus;
         # y: 0=upper→1=lower margin. (cor_* arrays now hold eye-local x/y, not the old canthus pixels.)
-        def _aperture_for(pupil):
-            # Pair the pupil with its OWN eye's aperture by proximity — robust to whatever L/R
-            # convention the pupil vs the landmark naming happen to use (they can differ).
-            if pupil[0] is None:
+        def _aperture_for(iris):
+            # Pair the iris with its OWN eye's aperture by proximity — robust to whatever L/R
+            # convention the iris vs the landmark naming happen to use (they can differ).
+            if iris[0] is None:
                 return (None, None, None, None)
             best = None
             for s in ("L", "R"):
                 ic, oc = _pt("inner_canthus_" + s), _pt("outer_canthus_" + s)
                 if ic and oc:
                     mx, my = (ic[0] + oc[0]) / 2, (ic[1] + oc[1]) / 2
-                    dd = (mx - pupil[0]) ** 2 + (my - pupil[1]) ** 2
+                    dd = (mx - iris[0]) ** 2 + (my - iris[1]) ** 2
                     if best is None or dd < best[0]:
                         best = (dd, s)
             if best is None:
@@ -1059,7 +1059,7 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
                     row += ["", "", ftr.status if ftr else "lost"]
             fcw.writerow(row)
 
-        # OVERLAY = RAW detected positions (verification: the marker must sit ON the pupil with no
+        # OVERLAY = RAW detected positions (verification: the marker must sit ON the iris with no
         # lag). The FILTERED signal is used only for the VNG trace + CSV, where shimmer matters and a
         # small filter lag is harmless. This keeps the overlay honest and never sliding.
         if clh is not None:
@@ -1110,12 +1110,12 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
     if show_raw:
         h_series = {"L raw": (rlx, GRAY), "R raw": (rrx, GRAY), **h_series}
         v_series = {"L raw": (rly, GRAY), "R raw": (rry, GRAY), **v_series}
-    plot_trace(times, h_series, "Raw image-space pupil X (de-meaned) - NOT CLINICAL (includes head movement)",
+    plot_trace(times, h_series, "Raw image-space iris X (de-meaned) - NOT CLINICAL (includes head movement)",
                out_dir / "trace_image_x.png", zero_each=True, shade=blink_any)
-    plot_trace(times, v_series, "Raw image-space pupil Y (de-meaned) - NOT CLINICAL (includes head movement)",
+    plot_trace(times, v_series, "Raw image-space iris Y (de-meaned) - NOT CLINICAL (includes head movement)",
                out_dir / "trace_image_y.png", zero_each=True, shade=blink_any)
 
-    # ---- EYE-LOCAL traces — THE CLINICAL VNG TRACE: pupil position within the eye aperture ----
+    # ---- EYE-LOCAL traces — THE CLINICAL VNG TRACE: iris position within the eye aperture ----
     # single eye by default; both only for --eye both. Blink frames are GAPS + shaded; red ticks =
     # frames where the aperture landmarks were degenerate.
     if show_both:
@@ -1236,18 +1236,18 @@ def review(video_path, output_dir="outputs"):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Stable pupil tracking")
+    ap = argparse.ArgumentParser(description="Stable iris tracking")
     ap.add_argument("video")
     ap.add_argument("--output-dir", default="outputs")
     ap.add_argument("--propose", action="store_true",
-                    help="Stage 0 preview: mark proposed pupils + face landmarks on the init frame")
+                    help="Stage 0 preview: mark proposed iris + face landmarks on the init frame")
     ap.add_argument("--approve", action="store_true",
                     help="Stage 0: review/correct then approve landmarks (saves approved_landmarks.json)")
     ap.add_argument("--auto-approve", action="store_true",
                     help="Stage 0 headless: approve the proposal without a GUI")
     ap.add_argument("--review", action="store_true")
     ap.add_argument("--filter", choices=["none", "light", "adaptive"], default="adaptive",
-                    help="pupil jitter filter (default adaptive 1€)")
+                    help="iris jitter filter (default adaptive 1€)")
     ap.add_argument("--show-raw-trace", action="store_true", help="also draw the raw signal faint")
     args = ap.parse_args()
     if args.propose:

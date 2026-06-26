@@ -1,4 +1,4 @@
-"""Jitter filters for pupil tracking (see docs/TRACKING_PHILOSOPHY.md).
+"""Jitter filters for iris tracking (see docs/TRACKING_PHILOSOPHY.md).
 
 Goal: remove measurement noise (shimmer) WITHOUT smearing real fast eye movements
 (saccades, nystagmus beats). The 1€ filter is adaptive — it smooths hard when the

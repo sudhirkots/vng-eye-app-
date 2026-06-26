@@ -1,14 +1,14 @@
-"""Stable, time-continuous pupil tracking (see STABLE_TRACKING.md).
+"""Stable, time-continuous iris tracking (see STABLE_TRACKING.md).
 
-Architecture: MediaPipe detection -> user confirmation of the pupil CIRCLE
+Architecture: MediaPipe detection -> user confirmation of the iris CIRCLE
 (centre + radius, per eye) -> CONTINUOUS TEMPLATE TRACKING, with MediaPipe used
 only as a *backup* (re-detection on low confidence, blink end, or loss).
 No Kalman filter, no smoothing, and no invented positions during blinks/occlusion
 (coordinates are left blank).
 
-Per frame the pupil is found by normalised cross-correlation of a confirmed pupil
+Per frame the iris is found by normalised cross-correlation of a confirmed iris
 template within a small window around the previous position (sub-pixel refined).
-The correlation score is the tracking confidence. Low score = pupil not visible
+The correlation score is the tracking confidence. Low score = iris not visible
 (blink/occlusion) -> stop, do not guess, attempt re-acquisition. One eye may be
 disabled (None) for one-eye analysis.
 """
@@ -33,11 +33,11 @@ class EyeObs:
     x: Optional[float] = None
     y: Optional[float] = None
     conf: float = 0.0
-    radius: float = 0.0              # dark-pupil radius
+    radius: float = 0.0              # dark-iris radius
     single_x: Optional[float] = None
     single_y: Optional[float] = None
     iris_radius: Optional[float] = None   # MediaPipe iris radius (for concentricity check)
-    pupil_contrast: float = 0.0     # how much darker the pupil is than the iris (0..1)
+    iris_contrast: float = 0.0     # how much darker the iris is than the iris (0..1)
     ear: Optional[float] = None     # eye-aspect-ratio (lid gap / eye width); low ⇒ eye closing/blink
 
 
@@ -59,7 +59,7 @@ APERTURE = {
 
 def _ear(pts, up, lo, c1, c2):
     """Eye-aspect-ratio: vertical eyelid gap divided by horizontal eye width. Position-independent
-    blink signal — it reflects lid closure, not where the pupil is, so flagging blinks with it never
+    blink signal — it reflects lid closure, not where the iris is, so flagging blinks with it never
     suppresses real eye movement (nystagmus/saccades)."""
     try:
         v = np.hypot(pts[up][0] - pts[lo][0], pts[up][1] - pts[lo][1])
@@ -78,13 +78,13 @@ def _iris_center(points, idxs):
     return float(c[0]), float(c[1]), r
 
 
-def refine_pupil(gray, cx, cy, iris_r):
-    """Estimate the DARK PUPIL radius inside the iris, keeping the centre concentric.
+def refine_iris(gray, cx, cy, iris_r):
+    """Estimate the DARK IRIS radius inside the iris, keeping the centre concentric.
 
-    The pupil is anatomically concentric with the iris, so the centre stays at the
+    The iris is anatomically concentric with the iris, so the centre stays at the
     MediaPipe iris centre (cx, cy); only the RADIUS is found, from the dark→bright
     transition: sample the mean intensity on concentric rings outward from the
-    centre and take the radius of the strongest brightening step (pupil edge) within
+    centre and take the radius of the strongest brightening step (iris edge) within
     a plausible band. Falls back to 0.5*iris_r. It is a *proposal* the user adjusts."""
     h, w = gray.shape
     default = (float(cx), float(cy), max(4.0, 0.5 * iris_r))
@@ -101,15 +101,15 @@ def refine_pupil(gray, cx, cy, iris_r):
         ys = np.clip((cy + r * sa).astype(int), 0, h - 1)
         prof.append(float(gray[ys, xs].mean()))
     prof = np.convolve(np.array(prof), np.ones(3) / 3.0, mode="same")   # smooth
-    core = float(np.mean(prof[:max(1, int(0.18 * iris_r))]))            # pupil-core darkness
-    hi = 0.65 * iris_r                                                  # pupil never near the iris edge
+    core = float(np.mean(prof[:max(1, int(0.18 * iris_r))]))            # iris-core darkness
+    hi = 0.65 * iris_r                                                  # iris never near the iris edge
     pr = None
     for i, r in enumerate(radii):                                      # FIRST (innermost) brightening
         if r < 0.15 * iris_r:
             continue
         if r > hi:
             break
-        if prof[i] - core > 12.0:                                      # pupil→iris step
+        if prof[i] - core > 12.0:                                      # iris→iris step
             pr = r
             break
     if pr is None:                                                     # low contrast (brown/cataract)
@@ -117,9 +117,9 @@ def refine_pupil(gray, cx, cy, iris_r):
     return float(cx), float(cy), float(np.clip(pr, 0.15 * iris_r, hi))
 
 
-def pupil_contrast(gray, cx, cy, pr, iris_r):
-    """How much darker the pupil disc is than the surrounding iris annulus, 0..1.
-    High = a clear dark pupil; ~0 = no contrast (e.g. a whitish cataractous pupil)."""
+def iris_contrast(gray, cx, cy, pr, iris_r):
+    """How much darker the iris disc is than the surrounding iris annulus, 0..1.
+    High = a clear dark iris; ~0 = no contrast (e.g. a whitish cataractous iris)."""
     h, w = gray.shape
     R = int(max(4, iris_r))
     x0, y0 = max(0, int(cx - R)), max(0, int(cy - R))
@@ -129,16 +129,16 @@ def pupil_contrast(gray, cx, cy, pr, iris_r):
         return 0.0
     yy, xx = np.ogrid[:roi.shape[0], :roi.shape[1]]
     d = np.hypot(xx - (cx - x0), yy - (cy - y0))
-    pupil = roi[d <= max(2.0, pr * 0.8)]
+    iris = roi[d <= max(2.0, pr * 0.8)]
     annulus = roi[(d >= pr * 1.1) & (d <= iris_r)]
-    if pupil.size < 3 or annulus.size < 3:
+    if iris.size < 3 or annulus.size < 3:
         return 0.0
-    return float(np.clip((annulus.mean() - pupil.mean()) / 255.0, 0.0, 1.0))
+    return float(np.clip((annulus.mean() - iris.mean()) / 255.0, 0.0, 1.0))
 
 
 def dark_centroid(gray, cx, cy, r):
     """Stable IRIS centre = intensity-weighted centroid of the dark iris disc in a circular ROI around
-    (cx, cy). The iris+pupil are the darkest region inside the limbus; averaging the centre over the
+    (cx, cy). The iris+iris are the darkest region inside the limbus; averaging the centre over the
     whole dark disc (hundreds of px) cancels boundary/segmentation noise → far less jitter than a
     single landmark. The ROI is kept ~iris-sized so eyelashes/lids mostly stay out. Returns (x, y)|None."""
     H, W = gray.shape
@@ -154,7 +154,7 @@ def dark_centroid(gray, cx, cy, r):
     vals = roi[circ]
     if vals.size < 8:
         return None
-    thr = float(np.percentile(vals, 45))            # darkest ~45% inside the ROI ≈ iris + pupil
+    thr = float(np.percentile(vals, 45))            # darkest ~45% inside the ROI ≈ iris + iris
     w = np.where(circ & (roi <= thr), thr - roi, 0.0)   # weight by how much darker than the threshold
     s = float(w.sum())
     if s < 1.0:
@@ -162,7 +162,7 @@ def dark_centroid(gray, cx, cy, r):
     return (float((w * xx).sum() / s) + x0, float((w * yy).sum() / s) + y0)
 
 
-class PupilDetector:
+class IrisDetector:
     """MediaPipe iris detector (ring-mean). Used for init and as the tracking backup."""
 
     def __init__(self):
@@ -184,10 +184,10 @@ class PupilDetector:
             if ic is None:
                 return EyeObs(False)
             ix, iy, ir = ic                              # MediaPipe iris proposal
-            px, py, pr = refine_pupil(gray, ix, iy, ir)  # → dark pupil (centre + radius), concentric
-            contrast = pupil_contrast(gray, px, py, pr, ir)
+            px, py, pr = refine_iris(gray, ix, iy, ir)  # → dark iris (centre + radius), concentric
+            contrast = iris_contrast(gray, px, py, pr, ir)
             return EyeObs(True, px, py, _eye_confidence(pts, ring, ix, iy), pr,
-                          single_x=ix, single_y=iy, iris_radius=ir, pupil_contrast=contrast,
+                          single_x=ix, single_y=iy, iris_radius=ir, iris_contrast=contrast,
                           ear=_ear(pts, *ear_idx))
 
         return True, eye(LEFT_IRIS, LEFT_EYE_RING, LEFT_EAR), eye(RIGHT_IRIS, RIGHT_EYE_RING, RIGHT_EAR)
@@ -195,7 +195,7 @@ class PupilDetector:
     def face_landmarks(self, frame_bgr):
         """Propose the EYE-APERTURE landmarks for user confirmation — the 4 aperture corners per eye
         that define the eye-local coordinate box (see TRACKING_PHILOSOPHY.md). At the current clinical
-        stage NO nose/cheek/tragus/face landmarks are used: the clinical trace is pupil motion WITHIN
+        stage NO nose/cheek/tragus/face landmarks are used: the clinical trace is iris motion WITHIN
         the eye opening, which these four landmarks (all moving with the eye) fully define — so head
         translation/camera movement cancels without any face/head reference. Returns {name:(x,y)|None};
         None = landmark outside the frame (unavailable)."""
@@ -215,7 +215,7 @@ class PupilDetector:
         return {k: avail(v) for k, v in out.items()}
 
 
-def select_init_frame(detector: PupilDetector, video_path, scan_frames: int = 150,
+def select_init_frame(detector: IrisDetector, video_path, scan_frames: int = 150,
                       good_conf: float = 0.6):
     """Return (frame_number, frame_bgr, left EyeObs, right EyeObs) for the clearest
     early frame. Prefers both eyes; falls back to the best single-eye frame so that
@@ -250,7 +250,7 @@ def select_init_frame(detector: PupilDetector, video_path, scan_frames: int = 15
 @dataclass
 class Track:
     status: str                     # initialized|tracked|uncertain|blink_or_occluded|reacquired|lost
-    x: Optional[float]              # VALID pupil position — None during blink/occlusion/jump (never invented)
+    x: Optional[float]              # VALID iris position — None during blink/occlusion/jump (never invented)
     y: Optional[float]
     radius: Optional[float] = None
     confidence: str = "none"        # high|medium|low|none
@@ -285,11 +285,11 @@ def _subpix(res, loc):
     return fx, fy
 
 
-class StableTracker:
+class IrisTracker:
     """Template-based continuous tracker; MediaPipe is the backup only.
 
     init_left/init_right are (x, y) or None (disabled eye). left_radius/right_radius
-    are the user-confirmed pupil radii.
+    are the user-confirmed iris radii.
     """
 
     def __init__(self, init_gray, init_left, init_right, left_radius, right_radius,
@@ -424,7 +424,7 @@ class StableTracker:
                      obs.x if obs.detected else None, obs.y if obs.detected else None)
 
     def apply_correction(self, key, gray, x, y, radius, frame_number):
-        """Record a manual pupil-circle correction and rebuild the template from it."""
+        """Record a manual iris-circle correction and rebuild the template from it."""
         self.enabled[key] = True
         self.corrections.append({"frame_number": frame_number, "eye": key,
                                  "x": round(x, 2), "y": round(y, 2), "radius": round(radius, 2)})

@@ -1,7 +1,7 @@
 # EyeVNG Version 1 Implementation Plan
 
 > **⭐ V1 DESIGN UPDATE (2026-06-26): single-eye, EYE-LOCAL tracking.** V1 = track ONE user-selected
-> eye via its confirmed pupil + four eye-boundary landmarks (inner/outer canthus, upper/lower margin);
+> eye via its confirmed iris + four eye-boundary landmarks (inner/outer canthus, upper/lower margin);
 > eye-local coords (0=inner→1=outer, 0=upper→1=lower); **no face/head landmarks**; MediaPipe is
 > proposal/fallback only. Canonical spec: **`VISION.md` → "VERSION 1 DESIGN — Single-Eye, Eye-Local
 > Tracking".** Binocular / head-impulse / VOR are future versions.
@@ -16,7 +16,7 @@
 - **Stage 0 — Landmark proposal and approval**
   - Detect / propose landmarks (MediaPipe) on the best frame
   - User review
-  - User correction (move / add / delete facial landmarks; move / resize pupil circles)
+  - User correction (move / add / delete facial landmarks; move / resize iris circles)
   - User approval
   - Save **`approved_landmarks.json`**
 - **Stage 1 — Continuous tracking** (from `approved_landmarks.json`)

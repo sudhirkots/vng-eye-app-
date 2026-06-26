@@ -8,11 +8,11 @@
 """
 import argparse
 
-from pupil_tracker import approve, propose_init, review, run
+from iris_tracker import approve, propose_init, review, run
 
 
 def main():
-    ap = argparse.ArgumentParser(description="EyeVNG — pupil + facial-landmark tracking")
+    ap = argparse.ArgumentParser(description="EyeVNG — iris + facial-landmark tracking")
     ap.add_argument("--video", required=True, help="path to the input video")
     ap.add_argument("--output-dir", default="outputs")
     ap.add_argument("--propose", action="store_true", help="preview proposed landmarks (no save)")
@@ -20,9 +20,9 @@ def main():
     ap.add_argument("--auto-approve", action="store_true", help="Stage 0 headless: accept the proposal")
     ap.add_argument("--review", action="store_true", help="review low-confidence frames of an existing run")
     ap.add_argument("--filter", choices=["none", "light", "adaptive"], default="adaptive",
-                    help="pupil jitter filter (default adaptive 1€)")
+                    help="iris jitter filter (default adaptive 1€)")
     ap.add_argument("--show-raw-trace", action="store_true",
-                    help="also draw the raw pupil signal faint (overlay + traces)")
+                    help="also draw the raw iris signal faint (overlay + traces)")
     ap.add_argument("--eye", choices=["auto", "left", "right", "both"], default="auto",
                     help="which eye's trace to display (default auto=single best-tracked eye; "
                          "'both' only when the eyes differ, e.g. INO)")

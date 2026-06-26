@@ -1,5 +1,10 @@
 # Stable Pupil Tracking — objective & spec (Dr. Kothari, 2026-06-24)
 
+> **⚠️ HISTORICAL (2026-06-24).** This is the origin spec for the continuous tracker, written when the
+> tracked object was called the *pupil*. EyeVNG V1 is now an **IRIS** tracker (`iris_tracker.py` /
+> `IrisTracker`); the durable design lives in `TRACKING_PHILOSOPHY.md` and `VISION.md`. Text below is
+> preserved as project history and uses the old "pupil" terminology.
+
 **Problem:** the pupil marker dances frame-to-frame even on a steady eye, because each frame is
 detected independently from a single MediaPipe landmark (468/473). This noise could later be
 mistaken for real eye movement.

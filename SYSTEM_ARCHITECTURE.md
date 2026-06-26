@@ -2,7 +2,7 @@
 
 > **⭐ V1 DESIGN UPDATE (2026-06-26): single-eye, EYE-LOCAL tracking.** The clinical trace uses only
 > ONE user-selected eye and its four eye-boundary landmarks (inner/outer canthus, upper/lower margin)
-> + the confirmed pupil — **NO face/nose/cheek/tragus/head-pose**. MediaPipe is
+> + the confirmed iris — **NO face/nose/cheek/tragus/head-pose**. MediaPipe is
 > proposal/fallback/reacquisition/quality only, never the per-frame signal. Canonical spec:
 > **`VISION.md` → "VERSION 1 DESIGN — Single-Eye, Eye-Local Tracking".** Any face/head-landmark
 > correction described below is deferred to a future (binocular / head-impulse / VOR) version.
@@ -71,9 +71,9 @@ EyeVNG/
 Human-confirmed anatomy is the source of truth; tracking must not begin until the user approves the
 landmarks (see `docs/TRACKING_PHILOSOPHY.md`). Components:
 
-- **MediaPipe proposal engine** — proposes facial landmarks + pupil circles on the best init frame.
+- **MediaPipe proposal engine** — proposes facial landmarks + iris circles on the best init frame.
 - **Landmark review interface** — the user moves / adds / deletes facial landmarks and moves / resizes
-  pupil circles; marks unavailable landmarks.
+  iris circles; marks unavailable landmarks.
 - **Landmark approval interface** — the user explicitly approves the set; nothing tracks before this.
 - **Landmark storage module** — persists the approved set.
 
@@ -107,7 +107,7 @@ Upload MP4
 - Preserve the original video file.
 
 ### Measurement (see `docs/TRACKING_PHILOSOPHY.md` — detect once → confirm → track)
-- Propose landmarks once with MediaPipe; the user confirms the anatomy (facial landmarks + pupil
+- Propose landmarks once with MediaPipe; the user confirms the anatomy (facial landmarks + iris
   circles). Confirmed structures become tracking targets.
 - Process every frame, but **track** the confirmed structures (local search from the previous
   position/size) rather than re-detecting them independently each frame.

@@ -2,7 +2,7 @@
 
 > **⭐ V1 DESIGN UPDATE (2026-06-26): single-eye, EYE-LOCAL tracking.** For Version 1 the clinical
 > trace is built from ONE user-selected eye and its four eye-boundary landmarks (inner/outer canthus,
-> upper/lower margin) + the confirmed pupil — **NO face/nose/cheek/tragus/head-pose**. The eye-local
+> upper/lower margin) + the confirmed iris — **NO face/nose/cheek/tragus/head-pose**. The eye-local
 > coordinate system (horizontal 0=inner→1=outer canthus, vertical 0=upper→1=lower margin) replaces the
 > canthus-midpoint / affine head-correction as the clinical signal. MediaPipe is
 > proposal/fallback/reacquisition/quality only — never the per-frame measurement. Canonical spec:
@@ -11,7 +11,7 @@
 
 **Status: SOURCE OF TRUTH for all tracking-related design decisions.** Where any other document
 (`VISION.md`, `SYSTEM_ARCHITECTURE.md`, `IMPLEMENTATION_PLAN.md`,
-`STABLE_TRACKING.md`, `HANDOFF.md`) disagrees about how anatomy/pupils are tracked, this document
+`STABLE_TRACKING.md`, `HANDOFF.md`) disagrees about how anatomy/iris are tracked, this document
 wins. Last revised: 2026-06-25.
 
 **The central shift:** the old design assumed *"detect landmarks continuously"*. The revised
@@ -102,26 +102,26 @@ After confirmation these landmarks become tracking targets.
 
 ---
 
-# Pupil Confirmation
+# Iris Confirmation
 
 The software should display enlarged eye views.
 
-The software may propose a pupil location.
+The software may propose an iris location.
 
 The user should:
 
-* move the pupil centre
-* resize the pupil circle
-* confirm the pupil boundary
+* move the iris centre
+* resize the iris circle
+* confirm the iris boundary
 
-The confirmed circle should cover the dark pupil only.
+The confirmed circle should cover the visible iris, out to the limbus.
 
-The pupil circle should not represent the whole iris.
+The circle represents the iris boundary, not the smaller pupil.
 
 Store:
 
-* pupil centre
-* pupil radius
+* iris centre
+* iris radius
 
 for each eye.
 
@@ -135,7 +135,7 @@ continue with one-eye tracking.
 
 **Core principle: human-confirmed anatomy is the source of truth.** AI landmark detection (MediaPipe)
 is only a *proposal*. **Tracking must not begin until the user explicitly approves the proposed facial
-landmarks and pupil circles.** This is a permanent project requirement, not a temporary implementation
+landmarks and iris circles.** This is a permanent project requirement, not a temporary implementation
 detail.
 
 **Why confirmed anatomy is preferred over repeated detection:** per-frame detection jitters and can
@@ -146,9 +146,9 @@ or occlusion) — never as the per-frame source of truth.
 
 Workflow:
 
-1. **Landmark proposal** — MediaPipe proposes the facial landmarks and pupil circles on the best
+1. **Landmark proposal** — MediaPipe proposes the facial landmarks and iris circles on the best
    initial frame.
-2. **Landmark editing** — the user may move, resize (pupil radius), add, or delete landmarks, and
+2. **Landmark editing** — the user may move, resize (iris radius), add, or delete landmarks, and
    mark any not visible as unavailable.
 3. **Landmark approval** — the user explicitly approves the set. Nothing is tracked before this.
 4. **Approved landmarks become tracking targets** — persisted to `approved_landmarks.json` and used
@@ -156,7 +156,7 @@ Workflow:
 5. **MediaPipe becomes fallback only** — consulted afterwards solely for re-acquisition.
 
 **Stage 0 is an INTERACTIVE confirmation screen, not silent auto-detection.** Running `--approve`
-must: open the chosen frame; visibly **mark and label** every proposed point (left pupil, right pupil,
+must: open the chosen frame; visibly **mark and label** every proposed point (left iris, right iris,
 nose bridge / central nasal reference, left cheek, right cheek, and any other stable facial reference
 in use); ask the user to confirm each; let the user **click the correct location** for any wrong
 point; save the corrected set to `approved_landmarks.json`; and **NOT proceed to tracking** (approval
@@ -164,48 +164,48 @@ only saves). The clinician must never have to trust automatic detection blindly.
 
 ---
 
-# Pupils and Face Are Independent — Head-Motion Compensation
+# Iriss and Face Are Independent — Head-Motion Compensation
 
-**Facial landmarks move with the head. Pupils move within the eyes.** They are two separate coordinate
+**Facial landmarks move with the head. Iriss move within the eyes.** They are two separate coordinate
 systems and must be tracked separately.
 
 - The face tracker may define a **moving head/face reference frame** per frame, and may move the eye
-  **search ROI** — but it must **never move, drag, shift, overwrite, or infer the pupil result.**
-- The pupil centre must always be found from **image evidence inside the eye region**. If it cannot be
+  **search ROI** — but it must **never move, drag, shift, overwrite, or infer the iris result.**
+- The iris centre must always be found from **image evidence inside the eye region**. If it cannot be
   found confidently, mark it `lost`/`blink_or_occluded`/`reacquired` — **never** invent it from face
   movement.
-- Output **both**: (a) **raw** pupil coordinates in image space, and (b) **head-corrected** eye
+- Output **both**: (a) **raw** iris coordinates in image space, and (b) **head-corrected** eye
   position relative to the tracked facial reference frame.
-- Correct logic: track face landmarks → estimate head reference-frame motion; track pupils → estimate
-  pupil centres from image evidence; compute eye position **relative to** the moving face frame. The
-  face tracker decides the search box, never the pupil location.
+- Correct logic: track face landmarks → estimate head reference-frame motion; track iris → estimate
+  iris centres from image evidence; compute eye position **relative to** the moving face frame. The
+  face tracker decides the search box, never the iris location.
 
 **Permanent audit rule:** no face-transform / landmark shift / affine / face-template motion may be
-applied directly to pupil x/y. Keep `raw_*_pupil_x/y` and `corrected_eye_h/v` as separate outputs.
+applied directly to iris x/y. Keep `raw_*_iris_center_x/y` and `corrected_eye_h/v` as separate outputs.
 
-**Drift fix (2026-06-25):** the earlier pupil tracker searched a template around the *previous pupil
-position*; during head movement the pupil left the window and the template locked onto a wrong dark
+**Drift fix (2026-06-25):** the earlier iris tracker searched a template around the *previous iris
+position*; during head movement the iris left the window and the template locked onto a wrong dark
 region (lash/brow/cheek) and drifted off the eye (493px median off-iris on the head-movement clip),
 while still reporting "tracked". **Fixed:** the search box is now centred every frame on the **robust
-eye location** (MediaPipe iris, which follows the head), the dark pupil is found *inside* that box,
+eye location** (MediaPipe iris, which follows the head), the iris is found *inside* that box,
 and any match outside the iris is rejected — so the marker physically cannot leave the eye. MediaPipe
-positions the search box only; it is not forced to be the pupil result. Verified: off-iris gap
+positions the search box only; it is not forced to be the iris result. Verified: off-iris gap
 493px → ~10px median; the frame that used to drift onto the jaw now keeps the marker on the eye.
 
 **Eye-in-head — preferred method: CANTHUS-RELATIVE (2026-06-25).** The head reference is each eye's
 own **medial (inner) and lateral (outer) canthus**: origin = the canthi midpoint, horizontal axis =
-inner→outer (forced rightward so the two eyes read conjugately); the pupil's displacement along that
+inner→outer (forced rightward so the two eyes read conjugately); the iris's displacement along that
 axis is the eye-in-head horizontal position (perpendicular = vertical). Because the canthi move WITH
 the head, this **cancels head/"hair" movement locally**, needs only two points per eye, leaves **no
 gaps** (canthi are present every frame), and reads conjugately. This is the `corrected_*_eye_h/v`
 signal. A whole-face affine transform was tried first but is limited by facial-landmark quality under
-3D head rotation (gaps + spikes) — kept only as a fallback. Pair each pupil with its NEAREST canthi.
+3D head rotation (gaps + spikes) — kept only as a fallback. Pair each iris with its NEAREST canthi.
 
 **Shimmer vs nystagmus (key principle, 2026-06-25).** Measurement-noise "shimmer" and nystagmus fast
 phases share the same high-frequency band, so **no temporal filter can remove one without denting the
 other**. Therefore: preserving the beats always wins (the filter is beat-preserving/near-passthrough);
-reduce noise at the **source** (better pupil detection), not by smoothing. The **overlay shows RAW**
-(verification — must sit on the pupil, no lag); the **VNG graph uses the filtered** signal (a small
+reduce noise at the **source** (better iris detection), not by smoothing. The **overlay shows RAW**
+(verification — must sit on the iris, no lag); the **VNG graph uses the filtered** signal (a small
 lag is harmless there). Raw is always kept in the CSV.
 
 **Reading the trace is a scaling problem too.** Real eye movement can be tracked yet invisible in a
@@ -224,7 +224,7 @@ Track the same anatomical structures continuously.
 Track:
 
 * confirmed facial landmarks
-* confirmed pupil circles
+* confirmed iris circles
 
 Do not redetect these structures independently on every frame.
 
@@ -277,7 +277,7 @@ These values should be exported.
 
 # Blink Handling
 
-If the pupil becomes invisible:
+If the iris becomes invisible:
 
 Possible causes:
 
@@ -289,12 +289,12 @@ Possible causes:
 The software should:
 
 1. Mark blink_or_occluded
-2. Stop reporting pupil position
+2. Stop reporting iris position
 3. Attempt automatic reacquisition
 4. Use MediaPipe if needed
 5. Ask the user only if reacquisition fails
 
-No artificial pupil position should be generated during blinks.
+No artificial iris position should be generated during blinks.
 
 ---
 
@@ -304,17 +304,17 @@ For Version 1:
 
 Eye position should be derived from:
 
-confirmed and tracked pupil centres.
+confirmed and tracked iris centres.
 
 Not from repeated iris detection.
 
-The pupil is the primary measurement target.
+The iris is the primary measurement target.
 
 ---
 
 # Torsional Analysis Strategy
 
-The pupil alone cannot detect torsional eye movement.
+The iris alone cannot detect torsional eye movement.
 
 Future torsional analysis will require:
 
@@ -338,7 +338,7 @@ It is not part of Version 1.
 
 The overlay video should convince a vestibular neurologist that:
 
-1. The pupil marker remains attached to the pupil.
+1. The iris marker remains attached to the iris.
 2. Facial landmarks remain attached to the same anatomical structures.
 3. The tracker follows anatomy rather than repeatedly rediscovering it.
 4. The resulting traces represent real eye movement rather than landmark jitter.
@@ -364,7 +364,7 @@ away from per-frame detection:
 | MediaPipe single iris landmark (468/473) | ~4.8 px | the "dance" — intrinsic, white-noise-like |
 | MediaPipe iris ring mean (5 landmarks) | ~4.8 px | no help — the iris estimate jitters as a unit |
 | Iris referenced to eye corner | ~5.5 px | no help — the corner landmark jitters more (6.8 px) |
-| Optical flow alone | ~3.2 px | smoother, but drifts ~187 px off the pupil |
+| Optical flow alone | ~3.2 px | smoother, but drifts ~187 px off the iris |
 | Template tracking + MediaPipe re-anchor | ~3.3 px, drift-bounded | smooth *and* locked |
 
 The jitter is intrinsic, independent MediaPipe landmark noise — confirming that continuous detection
@@ -372,19 +372,19 @@ cannot be made stable by averaging or re-referencing; it must be replaced by con
 anatomy.
 
 **Current code vs this philosophy:**
-- ✅ Pupil = dark pupil, concentric: `refine_pupil()` keeps the centre at the iris centre (pupil is
-  concentric) and shrinks only the radius to the dark pupil; `pupil_contrast()` reports how much
-  darker the pupil is than the iris (low ⇒ flagged, e.g. a cataractous/whitish pupil, or a dark-brown
-  iris where pupil/iris contrast is intrinsically low).
-- ✅ Anatomical-confirmation proposal: `pupil_tracker.py --propose` marks pupils (green) + iris (cyan,
-  concentric) + all facial landmarks (nose bridge/tip, cheeks, tragus, four canthi; amber) on the init
-  frame → `init_proposal.png`, with off-frame landmarks reported unavailable.
+- ✅ Iris boundary, concentric: `refine_iris()` keeps the centre at the iris centre and sets the
+  radius to the iris boundary (limbus); `iris_contrast()` reports the iris/sclera contrast (low ⇒
+  flagged, e.g. a washed-out or low-contrast iris). (Earlier drafts found the dark *pupil* concentric
+  inside the iris; V1 marks the iris boundary directly.)
+- ✅ Anatomical-confirmation proposal: `iris_tracker.py --propose` marks the iris (green) + all facial
+  landmarks (nose bridge/tip, cheeks, tragus, four canthi; amber) on the init frame →
+  `init_proposal.png`, with off-frame landmarks reported unavailable.
 - ✅ **Stage 0 approval gate:** `--approve` (review/correct → APPROVE) writes `approved_landmarks.json`;
-  tracking refuses to start without it and builds the tracker from the approved init frame + pupils.
+  tracking refuses to start without it and builds the tracker from the approved init frame + iris.
 - ✅ **Facial landmarks are now TRACKED:** `FaceLandmarkTracker` follows each approved facial landmark
   as a persistent template point (local search + MediaPipe backup), with status/confidence, drawn on
   the overlay (coloured by status) and exported to `face_landmarks.csv`. High-texture points
   (nose bridge/tip, tragus) track rock-solid; low-texture points (cheek, inner canthus) read
   "uncertain" more often — honestly flagged.
 - ⬜ **Interactive editing of facial landmarks** (move/add/delete in the approval GUI) is still pending
-  — approval currently edits pupil circles only.
+  — approval currently edits iris circles only.

@@ -1,8 +1,8 @@
 # EyeVNG Clinical Requirements
 
 > **⭐ V1 DESIGN UPDATE (2026-06-26): single-eye, EYE-LOCAL tracking.** The clinician marks ONE eye's
-> six landmarks (inner canthus, outer canthus, upper margin, lower margin, pupil centre, pupil radius);
-> the clinical trace is pupil movement WITHIN that eye's aperture — horizontal toward inner vs outer
+> six landmarks (inner canthus, outer canthus, upper margin, lower margin, iris centre, iris radius);
+> the clinical trace is iris movement WITHIN that eye's aperture — horizontal toward inner vs outer
 > canthus, vertical toward upper vs lower margin — **not** within the face or video frame. No
 > face/head landmarks at this stage. Canonical spec: **`VISION.md` → "VERSION 1 DESIGN — Single-Eye,
 > Eye-Local Tracking".**
@@ -72,35 +72,35 @@ The clinician should confirm:
 * cheeks
 * ears if visible
 * eye corners
-* pupil circles
+* iris circles
 
 Tracking should begin only after landmark approval.
 
 ---
 
-## Pupil Versus Iris
+## Iris Versus Pupil
 
-The primary measurement target is the pupil.
+The primary measurement target is the **iris**: the iris is rigidly attached to the eyeball, so iris motion is eyeball motion.
 
-The pupil should be represented by:
+The iris is represented by:
 
 * centre
-* radius
+* radius (the iris boundary / limbus)
 
 The user should be able to:
 
-* move pupil centre
-* resize pupil circle
+* move the iris centre
+* resize the iris circle
 
-The pupil circle should cover only the dark pupil.
+The iris circle should cover the visible iris out to the limbus.
 
-It should not cover the entire iris.
+> Historical note: earlier drafts tracked the dark **pupil** (concentric inside the iris). Version 1 tracks the iris boundary directly; the pupil is no longer part of the pipeline.
 
 ---
 
 ## Blink Handling
 
-When the pupil is hidden:
+When the iris is hidden:
 
 * do not invent coordinates
 * mark blink or occlusion
@@ -142,7 +142,7 @@ The overlay video is a primary clinical output.
 The clinician must be able to verify:
 
 * what is being tracked
-* where the pupil is
+* where the iris is
 * which landmarks are being followed
 
 The overlay acts as a quality-control tool.
@@ -151,7 +151,7 @@ The overlay acts as a quality-control tool.
 
 ## Torsional Eye Movement
 
-Horizontal and vertical eye movement can be estimated from pupil tracking.
+Horizontal and vertical eye movement can be estimated from iris tracking.
 
 Torsional eye movement cannot.
 
@@ -187,6 +187,6 @@ Current version success criterion:
 
 The clinician watches the overlay and agrees that:
 
-"The tracked pupil marker remains attached to the true pupil and follows it naturally through the recording."
+"The tracked iris marker remains attached to the true iris and follows it naturally through the recording."
 
 Only after this is achieved should further diagnostic modules be added.

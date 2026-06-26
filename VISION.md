@@ -20,7 +20,7 @@ measurement. The clinical signal is continuous IRIS tracking within the eye open
 
 **Clinical principle.** We measure movement of the eyeball. The iris is rigidly attached to the
 eyeball, so tracking the iris is sufficient for horizontal/vertical eye movement. **We do NOT track
-the pupil separately** (the small pupil marker jitters; the iris has a strong, high-contrast boundary
+the pupil** (the small pupil marker jitters; the iris has a strong, high-contrast boundary
 against the sclera and is larger and steadier). The iris centre is the eye-position measurement point.
 
 **1. Single eye.** V1 tracks ONE user-selected eye (left or right). The other eye may be detected by
@@ -93,10 +93,10 @@ How the eye-movement trace is shown on/with the video. These are firm requiremen
 4. **The trace must NEVER cover the eyes.** Because the source clips zoom/pan over the eyes, any
    on-video overlay eventually lands on them. RESOLUTION: render the trace in a **dedicated strip BELOW
    the video** (extend the canvas downward; video pixels untouched, eyes always fully visible).
-5. **Signal shown = canthus-relative ("eye-in-socket")** — pupil measured against that eye's own
+5. **Signal shown = canthus-relative ("eye-in-socket")** — iris measured against that eye's own
    inner+outer canthus (cancels head/"hair" movement). This is the `corrected_*` output.
 
-Implemented in `pupil_tracker.py` (`superimpose_traces`, `run`) + `app.py` (`--eye`). Uncommitted.
+Implemented in `iris_tracker.py` (`superimpose_traces`, `run`) + `app.py` (`--eye`). Uncommitted.
 
 ## Project Vision
 
@@ -192,7 +192,7 @@ But should not determine eye position independently in every frame.
 
 Reason:
 
-Frame-by-frame detection causes the pupil marker to jitter or "dance."
+Frame-by-frame detection causes the iris marker to jitter or "dance."
 
 This creates artificial eye movements.
 
@@ -202,11 +202,11 @@ This creates artificial eye movements.
 
 MediaPipe
 ↓
-Initial pupil detection
+Initial iris detection
 ↓
 User confirmation
 ↓
-Continuous pupil tracking
+Continuous iris tracking
 ↓
 Blink handling
 ↓
@@ -224,17 +224,17 @@ After video upload:
 
 1. Find first good frame.
 2. Show enlarged eye images.
-3. Display detected pupil circles.
+3. Display detected iris circles.
 4. Allow user to edit:
 
-   * pupil centre
-   * pupil size
+   * iris centre
+   * iris size
 
 The user must be able to:
 
-* click and drag pupil centre
-* resize pupil circle
-* ensure circle covers the entire pupil
+* click and drag iris centre
+* resize iris circle
+* ensure circle covers the entire iris
 
 Store:
 
@@ -259,7 +259,7 @@ If one eye is unusable:
 # Landmark Review and Approval Workflow
 
 Human-confirmed anatomy is the source of truth; AI landmark detection is only a proposal. **Tracking
-must not begin until the user approves the proposed facial landmarks and pupil circles.** (Core
+must not begin until the user approves the proposed facial landmarks and iris circles.** (Core
 project requirement — see `docs/TRACKING_PHILOSOPHY.md`.)
 
 Workflow:
@@ -285,38 +285,38 @@ Requirements:
 * facial landmarks can be moved
 * facial landmarks can be deleted
 * facial landmarks can be added
-* pupil circles can be moved
-* pupil circles can be resized
+* iris circles can be moved
+* iris circles can be resized
 * tracking starts only after approval
 
 Approved landmarks are saved to `approved_landmarks.json` and become the initial reference for all
 tracking modules.
 
 **Stage 0 must be an INTERACTIVE confirmation screen (not silent auto-detection).** `--approve` opens
-the frame, marks + labels each proposed point (left pupil, right pupil, nose bridge / central nasal
+the frame, marks + labels each proposed point (left iris, right iris, nose bridge / central nasal
 reference, left/right cheek, and any other stable reference), asks the clinician to confirm each,
 lets the clinician click the correct location for any wrong point, saves to `approved_landmarks.json`,
 and does **not** start tracking. Plain `python app.py --video X` then refuses to run without
 `approved_landmarks.json`, loads it, and tracks from the approved points (no per-frame re-detection;
 reacquisition only on lost confidence).
 
-**Stage 0 controls (LOCKED):** the **mouse is used only to drag a point** to move it (pupils and
-facial landmarks). The **pupil radius is changed only with the `+` / `-` keys**. No edge-drag or
+**Stage 0 controls (LOCKED):** the **mouse is used only to drag a point** to move it (iris and
+facial landmarks). The **iris radius is changed only with the `+` / `-` keys**. No edge-drag or
 mouse-wheel resize. (`d` toggles a point off/on; Enter approves; q cancels.)
 
 # Head-Motion Compensation Requirements
 
-Facial landmarks move with the head; pupils move within the eyes — track both, but the facial
-landmarks are used **only** to correct for head movement, never to decide the pupil location.
+Facial landmarks move with the head; iris move within the eyes — track both, but the facial
+landmarks are used **only** to correct for head movement, never to decide the iris location.
 
 * Track the approved facial landmarks frame-to-frame; they define the head/face reference frame.
-* Track pupils independently from the eye image; the face tracker may move the eye **search box** but
-  must **never** move/overwrite the pupil result. If the pupil can't be found → lost/blink/reacquire,
+* Track iris independently from the eye image; the face tracker may move the eye **search box** but
+  must **never** move/overwrite the iris result. If the iris can't be found → lost/blink/reacquire,
   never invented from face motion.
-* CSV must separate: `raw_left_pupil_x/y`, `raw_right_pupil_x/y`, tracked `face_landmark_x/y`,
+* CSV must separate: `raw_left_iris_center_x/y`, `raw_right_iris_center_x/y`, tracked `face_landmark_x/y`,
   head reference-frame / face transform (if implemented), `corrected_eye_h`, `corrected_eye_v`,
   `tracking_confidence`, blink/lost/reacquired flags.
-* Overlay may show: raw tracked pupils, tracked facial landmarks, the head-reference frame, and the
+* Overlay may show: raw tracked iris, tracked facial landmarks, the head-reference frame, and the
   corrected gaze trace.
 
 ---
@@ -325,26 +325,26 @@ landmarks are used **only** to correct for head movement, never to decide the pu
 
 After confirmation:
 
-Track the pupil continuously.
+Track the iris continuously.
 
 Do NOT redetect independently on every frame.
 
 Instead:
 
-* use previous pupil position
-* use previous pupil size
+* use previous iris position
+* use previous iris size
 * search locally
 * minimize frame-to-frame jitter
 
 Goal:
 
-The marker should appear attached to the pupil.
+The marker should appear attached to the iris.
 
 ---
 
 # Blink Handling
 
-When the pupil disappears:
+When the iris disappears:
 
 Possible causes:
 
@@ -359,7 +359,7 @@ Workflow:
 
    blink_or_occluded
 
-2. Do not invent pupil position.
+2. Do not invent iris position.
 
 3. Attempt automatic reacquisition.
 
@@ -403,8 +403,8 @@ Overlay must display:
 * face landmarks
 * eye landmarks
 * iris centres
-* tracked pupil circle
-* pupil centre
+* tracked iris circle
+* iris centre
 * tracking status
 * tracking confidence
 * frame number
@@ -442,7 +442,7 @@ No hidden smoothing.
 
 No silent interpolation.
 
-No invented pupil positions.
+No invented iris positions.
 
 If tracking fails:
 
@@ -460,13 +460,13 @@ frame_number
 timestamp_ms
 time_sec
 
-left_pupil_x
-left_pupil_y
-left_pupil_radius
+left_iris_center_x
+left_iris_center_y
+left_iris_radius
 
-right_pupil_x
-right_pupil_y
-right_pupil_radius
+right_iris_center_x
+right_iris_center_y
+right_iris_radius
 
 tracking_status_left
 tracking_status_right
@@ -558,9 +558,9 @@ Preserve image quality.
 
 # Torsional Tracking Philosophy
 
-Pupil centre alone cannot detect torsion.
+Iris centre alone cannot detect torsion.
 
-Pupil tracking provides:
+Iris tracking provides:
 
 * horizontal movement
 * vertical movement
@@ -587,9 +587,9 @@ Current objective:
 
 Upload Video
 ↓
-Confirm Pupil
+Confirm Iris
 ↓
-Track Pupil Reliably
+Track Iris Reliably
 ↓
 Handle Blinks
 ↓
@@ -607,7 +607,7 @@ Nothing beyond this stage should be implemented until tracking quality is clinic
 
 A vestibular neurologist watches the overlay video and says:
 
-"The marker is genuinely attached to the pupil and follows it smoothly through the recording."
+"The marker is genuinely attached to the iris and follows it smoothly through the recording."
 
 Only after this is achieved should the project move to:
 
