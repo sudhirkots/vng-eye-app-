@@ -33,11 +33,10 @@ class EyeObs:
     x: Optional[float] = None
     y: Optional[float] = None
     conf: float = 0.0
-    radius: float = 0.0              # dark-iris radius
+    radius: float = 0.0              # iris (limbus) radius — the marked/tracked iris boundary
     single_x: Optional[float] = None
     single_y: Optional[float] = None
-    iris_radius: Optional[float] = None   # MediaPipe iris radius (for concentricity check)
-    iris_contrast: float = 0.0     # how much darker the iris is than the iris (0..1)
+    iris_radius: Optional[float] = None   # MediaPipe iris radius (== radius; kept for template sizing)
     ear: Optional[float] = None     # eye-aspect-ratio (lid gap / eye width); low ⇒ eye closing/blink
 
 
@@ -78,90 +77,6 @@ def _iris_center(points, idxs):
     return float(c[0]), float(c[1]), r
 
 
-def refine_iris(gray, cx, cy, iris_r):
-    """Estimate the DARK IRIS radius inside the iris, keeping the centre concentric.
-
-    The iris is anatomically concentric with the iris, so the centre stays at the
-    MediaPipe iris centre (cx, cy); only the RADIUS is found, from the dark→bright
-    transition: sample the mean intensity on concentric rings outward from the
-    centre and take the radius of the strongest brightening step (iris edge) within
-    a plausible band. Falls back to 0.5*iris_r. It is a *proposal* the user adjusts."""
-    h, w = gray.shape
-    default = (float(cx), float(cy), max(4.0, 0.5 * iris_r))
-    if iris_r < 4:
-        return default
-    angles = np.linspace(0, 2 * np.pi, 24, endpoint=False)
-    ca, sa = np.cos(angles), np.sin(angles)
-    radii = np.arange(2.0, 0.9 * iris_r, 1.0)
-    if len(radii) < 5:
-        return default
-    prof = []
-    for r in radii:
-        xs = np.clip((cx + r * ca).astype(int), 0, w - 1)
-        ys = np.clip((cy + r * sa).astype(int), 0, h - 1)
-        prof.append(float(gray[ys, xs].mean()))
-    prof = np.convolve(np.array(prof), np.ones(3) / 3.0, mode="same")   # smooth
-    core = float(np.mean(prof[:max(1, int(0.18 * iris_r))]))            # iris-core darkness
-    hi = 0.65 * iris_r                                                  # iris never near the iris edge
-    pr = None
-    for i, r in enumerate(radii):                                      # FIRST (innermost) brightening
-        if r < 0.15 * iris_r:
-            continue
-        if r > hi:
-            break
-        if prof[i] - core > 12.0:                                      # iris→iris step
-            pr = r
-            break
-    if pr is None:                                                     # low contrast (brown/cataract)
-        pr = 0.4 * iris_r
-    return float(cx), float(cy), float(np.clip(pr, 0.15 * iris_r, hi))
-
-
-def iris_contrast(gray, cx, cy, pr, iris_r):
-    """How much darker the iris disc is than the surrounding iris annulus, 0..1.
-    High = a clear dark iris; ~0 = no contrast (e.g. a whitish cataractous iris)."""
-    h, w = gray.shape
-    R = int(max(4, iris_r))
-    x0, y0 = max(0, int(cx - R)), max(0, int(cy - R))
-    x1, y1 = min(w, int(cx + R)), min(h, int(cy + R))
-    roi = gray[y0:y1, x0:x1].astype(np.float32)
-    if roi.size == 0:
-        return 0.0
-    yy, xx = np.ogrid[:roi.shape[0], :roi.shape[1]]
-    d = np.hypot(xx - (cx - x0), yy - (cy - y0))
-    iris = roi[d <= max(2.0, pr * 0.8)]
-    annulus = roi[(d >= pr * 1.1) & (d <= iris_r)]
-    if iris.size < 3 or annulus.size < 3:
-        return 0.0
-    return float(np.clip((annulus.mean() - iris.mean()) / 255.0, 0.0, 1.0))
-
-
-def dark_centroid(gray, cx, cy, r):
-    """Stable IRIS centre = intensity-weighted centroid of the dark iris disc in a circular ROI around
-    (cx, cy). The iris+iris are the darkest region inside the limbus; averaging the centre over the
-    whole dark disc (hundreds of px) cancels boundary/segmentation noise → far less jitter than a
-    single landmark. The ROI is kept ~iris-sized so eyelashes/lids mostly stay out. Returns (x, y)|None."""
-    H, W = gray.shape
-    R = int(max(6, 1.15 * r))
-    x0, y0 = max(0, int(cx - R)), max(0, int(cy - R))
-    x1, y1 = min(W, int(cx + R)), min(H, int(cy + R))
-    roi = gray[y0:y1, x0:x1].astype(np.float32)
-    if roi.size < 16:
-        return None
-    yy, xx = np.ogrid[:roi.shape[0], :roi.shape[1]]
-    cxr, cyr = cx - x0, cy - y0
-    circ = (xx - cxr) ** 2 + (yy - cyr) ** 2 <= R * R
-    vals = roi[circ]
-    if vals.size < 8:
-        return None
-    thr = float(np.percentile(vals, 45))            # darkest ~45% inside the ROI ≈ iris + iris
-    w = np.where(circ & (roi <= thr), thr - roi, 0.0)   # weight by how much darker than the threshold
-    s = float(w.sum())
-    if s < 1.0:
-        return None
-    return (float((w * xx).sum() / s) + x0, float((w * yy).sum() / s) + y0)
-
-
 class IrisDetector:
     """MediaPipe iris detector (ring-mean). Used for init and as the tracking backup."""
 
@@ -176,18 +91,15 @@ class IrisDetector:
         if not res.multi_face_landmarks:
             return False, EyeObs(False), EyeObs(False)
         lm = res.multi_face_landmarks[0].landmark
-        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
         pts = [(lm[i].x * w, lm[i].y * h) for i in range(len(lm))]
 
         def eye(iris_idx, ring, ear_idx):
             ic = _iris_center(pts, iris_idx)
             if ic is None:
                 return EyeObs(False)
-            ix, iy, ir = ic                              # MediaPipe iris proposal
-            px, py, pr = refine_iris(gray, ix, iy, ir)  # → dark iris (centre + radius), concentric
-            contrast = iris_contrast(gray, px, py, pr, ir)
-            return EyeObs(True, px, py, _eye_confidence(pts, ring, ix, iy), pr,
-                          single_x=ix, single_y=iy, iris_radius=ir, iris_contrast=contrast,
+            ix, iy, ir = ic          # MediaPipe iris: centre + boundary (limbus) radius — the iris proposal
+            return EyeObs(True, ix, iy, _eye_confidence(pts, ring, ix, iy), ir,
+                          single_x=ix, single_y=iy, iris_radius=ir,
                           ear=_ear(pts, *ear_idx))
 
         return True, eye(LEFT_IRIS, LEFT_EYE_RING, LEFT_EAR), eye(RIGHT_IRIS, RIGHT_EYE_RING, RIGHT_EAR)

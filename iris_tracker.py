@@ -32,6 +32,15 @@ APERTURE_NAMES = tuple(APERTURE.keys())   # the 8 eye-aperture landmark names (4
 # (no lag — unlike smoothing). Display/traces only; the CSV keeps the RAW values.
 DEADBAND_PX = 6.0
 
+# ---- IRIS DRIFT GUARDS (anatomical; pure geometry, NO pixel thresholding) ----
+# The tracked iris must stay anatomically attached. A frame failing an INVALIDATING guard is marked
+# drift_suspected → its eye-local value is dropped (a gap; never plotted as false eye movement).
+DRIFT_APERTURE_MARGIN = 0.25   # iris centre may sit at most this far outside the [0,1] aperture box
+DRIFT_ANCHOR_FRAC = 0.90       # tracked centre must stay within this × the MediaPipe iris radius of
+                               # the independent MediaPipe iris centre (which stays on the real eye)
+DRIFT_EXCURSION = 0.60         # 1-frame eye-local jump above this = "review": flagged for visual
+                               # confirmation but STILL PLOTTED (a real fast-phase is a valid big jump)
+
 
 def _deadband(state, key, x, y, db=DEADBAND_PX):
     """Hold the previous displayed position if the new one is within db px; else snap. Resets
@@ -144,10 +153,10 @@ FACE_CODE = {"nose_bridge_mid": "Nb", "nose_tip": "Nt", "cheek_R": "ChR", "cheek
 
 
 def propose_init(video_path, output_dir="outputs"):
-    """Mark what the software thinks are the iris AND the facial landmarks, and
+    """Mark what the software thinks is the iris AND the facial landmarks, and
     save a review image so the user can confirm/correct before tracking (anatomical
-    confirmation, step 1). Iris and iris are drawn as concentric circles so the user
-    can verify concentricity; iris darkness contrast is reported."""
+    confirmation, step 1). The iris boundary (MediaPipe limbus) is drawn for the user
+    to adjust in Stage 0."""
     video_path = Path(video_path)
     detector = IrisDetector()
     init = select_init_frame(detector, video_path)
@@ -161,12 +170,10 @@ def propose_init(video_path, output_dir="outputs"):
     out_dir.mkdir(parents=True, exist_ok=True)
 
     vis = frame.copy()
-    # concentric iris (cyan, thin) + iris (green) so concentricity is visible
+    # iris boundary (green) + centre dot
     for e in (le, re):
         if e.detected:
             c = (int(e.x), int(e.y))
-            if e.iris_radius:
-                cv2.circle(vis, c, int(e.iris_radius), CYAN, 1)
             cv2.circle(vis, c, int(e.radius), GREEN, 2)
             cv2.circle(vis, c, 2, GREEN, -1)
     # facial landmarks (amber dots + short codes); unavailable ones are skipped
@@ -194,11 +201,9 @@ def propose_init(video_path, output_dir="outputs"):
             continue
         big = cv2.resize(crop, None, fx=4, fy=4, interpolation=cv2.INTER_NEAREST)
         cx, cy = int((e.x - x0) * 4), int((e.y - y0) * 4)
-        if e.iris_radius:
-            cv2.circle(big, (cx, cy), int(e.iris_radius * 4), CYAN, 1)   # iris (concentric)
-        cv2.circle(big, (cx, cy), int(e.radius * 4), GREEN, 2)           # iris
+        cv2.circle(big, (cx, cy), int(e.radius * 4), GREEN, 2)           # iris boundary
         cv2.circle(big, (cx, cy), 3, GREEN, -1)
-        cv2.putText(big, f"{key} iris r={e.radius:.0f} contrast={e.iris_contrast:.2f}",
+        cv2.putText(big, f"{key} iris r={e.radius:.0f}",
                     (8, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.6, GREEN, 2)
         crops.append(big)
 
@@ -220,11 +225,10 @@ def propose_init(video_path, output_dir="outputs"):
     path = out_dir / "init_proposal.png"
     cv2.imwrite(str(path), composed)
 
-    print(f"Init frame {fr}: (concentricity = iris should sit at the iris centre; contrast = dark iris)")
+    print(f"Init frame {fr}: iris boundary proposal (green) — confirm/adjust in Stage 0")
     for key, e in (("L", le), ("R", re)):
         print(f"  iris {key}: " + ("not detected" if not e.detected else
-              f"centre=({e.x:.0f},{e.y:.0f}) iris_r={e.radius:.0f} iris_r={e.iris_radius:.0f} "
-              f"contrast={e.iris_contrast:.2f}" + ("  [LOW CONTRAST — check]" if e.iris_contrast < 0.08 else "")))
+              f"centre=({e.x:.0f},{e.y:.0f}) iris_r={e.radius:.0f}"))
     print("  face landmarks: " + ", ".join(f"{FACE_CODE[k]}" for k, v in faces.items() if v is not None))
     if unavailable:
         print("  unavailable (off-frame): " + ", ".join(FACE_CODE.get(u, u) for u in unavailable))
@@ -718,6 +722,39 @@ def eye_local(iris, inner, outer, upper, lower):
     return proj(inner, outer), proj(upper, lower)
 
 
+def iris_drift_check(hv, prev_hv, tracked_xy, mp_xy, mp_iris_r):
+    """Anatomical drift guard for the V1 iris trace — pure geometry, no pixel thresholding.
+
+    Decides whether the tracked iris is still physically attached to the eye this frame:
+      • outside_aperture — the iris CENTRE left the marked eye opening (eye-local beyond the box)
+      • off_anchor       — the tracked centre is too far from the INDEPENDENT MediaPipe iris centre
+                           (MediaPipe iris stays on the real eye; a drifted template won't), scaled by
+                           the current MediaPipe iris radius so it is zoom-invariant — this also guards
+                           iris SIZE: a jump onto a wrong-size/wrong-place region fails it
+      • review_excursion — a large 1-frame eye-local jump that is OTHERWISE anatomically valid; a real
+                           fast-phase looks like this, so it is FLAGGED for visual confirmation but NOT
+                           discarded (we never delete genuine eye movement)
+
+    Returns (state, invalid): state ∈ {"","outside_aperture","off_anchor","review_excursion"};
+    invalid=True only for the first two (caller drops the frame's eye-local value → a gap)."""
+    h, v = hv
+    if h is None or v is None:
+        return "", False                      # already a gap (blink / occlusion / degenerate aperture)
+    m = DRIFT_APERTURE_MARGIN
+    if not (-m <= h <= 1.0 + m) or not (-m <= v <= 1.0 + m):
+        return "outside_aperture", True
+    if mp_xy is not None and mp_iris_r and tracked_xy[0] is not None:
+        gap = float(np.hypot(tracked_xy[0] - mp_xy[0], tracked_xy[1] - mp_xy[1]))
+        if gap > DRIFT_ANCHOR_FRAC * mp_iris_r:
+            return "off_anchor", True
+    if prev_hv is not None:
+        ph, pv = prev_hv                       # either axis may be None (degenerate aperture last frame)
+        if (ph is not None and abs(h - ph) > DRIFT_EXCURSION) or \
+           (pv is not None and abs(v - pv) > DRIFT_EXCURSION):
+            return "review_excursion", False  # large but valid → flag for review, keep plotting
+    return "", False
+
+
 def eye_velocity(times, v, fast_k=3.0):
     """Frame-to-frame velocity of an eye-local series (per second), with gaps preserved (None where
     either endpoint is invalid — blink). Returns (vel, fast) aligned to times[1:]: `fast` flags
@@ -910,7 +947,10 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
                  "tracking_status_left", "tracking_status_right",
                  "artifact_type_left", "artifact_type_right",
                  "ear_left", "ear_right",
-                 "confidence_left", "confidence_right"])
+                 "confidence_left", "confidence_right",
+                 # drift guard: "" = iris anatomically attached; outside_aperture/off_anchor = invalid
+                 # (eye-local dropped, not plotted); review_excursion = large but valid, flagged to review
+                 "iris_flag_left", "iris_flag_right"])
 
     face_csv_f = fcw = None
     if face_tracker:
@@ -934,6 +974,10 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
     stat_L, stat_R = [], []                  # per-frame tracking status per eye (for reacquisition stats)
     poor_flags = []                          # True where transform quality is poor/degenerate
     q_counts = {}                            # transform quality tally
+    iris_flag_L, iris_flag_R = [], []        # per-frame drift-guard state per eye ("" if attached)
+    prev_valid = {"L": None, "R": None}      # last anatomically-valid eye-local (h,v) per eye
+    flag_counts = {}                         # drift-guard state tally (off_anchor/outside_aperture/review_excursion)
+    saved_drift = 0                          # debug frames saved for drift-suspected frames
     tracked_series = []
     counts = {}
     # DISPLAY eye selection: show ONE eye by default (conjugate nystagmus on both eyes is redundant
@@ -1028,6 +1072,31 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
         q_counts[quality] = q_counts.get(quality, 0) + 1
         poor_flags.append(quality == "degenerate")
 
+        # ---- IRIS DRIFT GUARDS — geometry only; MediaPipe iris = independent anatomical anchor ----
+        # An invalidating guard (outside_aperture / off_anchor) drops the eye-local value → a gap, so a
+        # drifted marker is NEVER plotted as false eye movement. review_excursion keeps plotting (a real
+        # fast-phase is a valid big jump) but flags the frame for visual confirmation.
+        _f_mp, le_mp, re_mp = mp_detect()
+        mp_L = (le_mp.single_x, le_mp.single_y) if le_mp.detected else None
+        mp_R = (re_mp.single_x, re_mp.single_y) if re_mp.detected else None
+        st_L, inv_L = iris_drift_check((clh, clv), prev_valid["L"], (lt.x, lt.y), mp_L,
+                                       le_mp.iris_radius if le_mp.detected else None)
+        st_R, inv_R = iris_drift_check((crh, crv), prev_valid["R"], (rt.x, rt.y), mp_R,
+                                       re_mp.iris_radius if re_mp.detected else None)
+        if inv_L:
+            clh = clv = None
+        if inv_R:
+            crh = crv = None
+        if clh is not None:                        # advance the anchor for the next excursion check
+            prev_valid["L"] = (clh, clv)
+        if crh is not None:
+            prev_valid["R"] = (crh, crv)
+        iris_flag_L.append(st_L); iris_flag_R.append(st_R)
+        if st_L:
+            flag_counts[st_L] = flag_counts.get(st_L, 0) + 1
+        if st_R:
+            flag_counts[st_R] = flag_counts.get(st_R, 0) + 1
+
         # raw_* = always-detected centre (preserved); valid (lt.x/y) is None during blink/occlusion/jump.
         l_raw = (lt.raw_x if lt.raw_x is not None else lt.x, lt.raw_y if lt.raw_y is not None else lt.y)
         r_raw = (rt.raw_x if rt.raw_x is not None else rt.x, rt.raw_y if rt.raw_y is not None else rt.y)
@@ -1047,7 +1116,8 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
                      quality, _r(residual), n_used,
                      _r(lt.radius), _r(rt.radius),
                      lt.status, rt.status, lt.artifact_type, rt.artifact_type,
-                     _r(lt.ear), _r(rt.ear), lt.confidence, rt.confidence])
+                     _r(lt.ear), _r(rt.ear), lt.confidence, rt.confidence,
+                     st_L, st_R])
 
         if fcw:
             row = [fr, round(t, 4)]
@@ -1093,6 +1163,11 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
             if seen_bad % stride == 0 and saved_bad < max_debug_frames:
                 cv2.imwrite(str(dbg_dir / f"{fr:06d}_{fstatus}.png"), vis)
                 saved_bad += 1
+        # save a debug frame whenever a drift guard fired (visual proof of where the marker sat)
+        drift_reason = st_L or st_R
+        if drift_reason and fr >= init_fr and saved_drift < max_debug_frames:
+            cv2.imwrite(str(dbg_dir / f"{fr:06d}_{drift_reason}.png"), vis)
+            saved_drift += 1
     cap.release(); writer.release(); csv_f.close()
     if face_csv_f:
         face_csv_f.close()
@@ -1117,21 +1192,26 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
 
     # ---- EYE-LOCAL traces — THE CLINICAL VNG TRACE: iris position within the eye aperture ----
     # single eye by default; both only for --eye both. Blink frames are GAPS + shaded; red ticks =
-    # frames where the aperture landmarks were degenerate.
+    # degenerate aperture OR a drift-guard hit (drift-suspected frames are already dropped to gaps).
+    drift_bool_L = [bool(x) for x in iris_flag_L]
+    drift_bool_R = [bool(x) for x in iris_flag_R]
     if show_both:
         eh = {"L": (cor_lh, GREEN), "R": (cor_rh, BLUE)}
         ev = {"L": (cor_lv, GREEN), "R": (cor_rv, BLUE)}
         shade_eye, vel_src, vcol = blink_any, cor_lh, GREEN
+        drift_disp = [a or b for a, b in zip(drift_bool_L, drift_bool_R)]
     else:
         e = chosen_eye or ("R" if valid_R >= valid_L else "L")
         nm, vcol = ("L", GREEN) if e == "L" else ("R", BLUE)
         eh = {nm: (cor_lh if e == "L" else cor_rh, vcol)}
         ev = {nm: (cor_lv if e == "L" else cor_rv, vcol)}
         shade_eye, vel_src = (blink_L if e == "L" else blink_R), (cor_lh if e == "L" else cor_rh)
+        drift_disp = drift_bool_L if e == "L" else drift_bool_R
+    eye_flags = [p or d for p, d in zip(poor_flags, drift_disp)]
     plot_trace(times, eh, "Eye-local HORIZONTAL  (0 = inner canthus  ->  1 = outer canthus)  vs time",
-               out_dir / "trace_eyelocal_h.png", flags=poor_flags, shade=shade_eye, scale_exclude=poor_flags)
+               out_dir / "trace_eyelocal_h.png", flags=eye_flags, shade=shade_eye, scale_exclude=eye_flags)
     plot_trace(times, ev, "Eye-local VERTICAL  (0 = upper margin  ->  1 = lower margin)  vs time",
-               out_dir / "trace_eyelocal_v.png", flags=poor_flags, shade=shade_eye, scale_exclude=poor_flags)
+               out_dir / "trace_eyelocal_v.png", flags=eye_flags, shade=shade_eye, scale_exclude=eye_flags)
 
     # ---- EYE-LOCAL horizontal VELOCITY — reveals slow drift vs fast reset (jerk-nystagmus sawtooth) ----
     vel, fast = eye_velocity(times, vel_src)
@@ -1184,6 +1264,15 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
         "jitter_left_raw_px": jitter(rlx, rly),
         "jitter_left_filtered_px": jitter(flx, fly),
         "aperture_quality_counts": q_counts,
+        "iris_drift_guards": {
+            "thresholds": {"aperture_margin": DRIFT_APERTURE_MARGIN, "anchor_frac": DRIFT_ANCHOR_FRAC,
+                           "excursion": DRIFT_EXCURSION},
+            "flag_counts": flag_counts,
+            "invalidated_left": sum(f in ("outside_aperture", "off_anchor") for f in iris_flag_L),
+            "invalidated_right": sum(f in ("outside_aperture", "off_anchor") for f in iris_flag_R),
+            "review_left": sum(f == "review_excursion" for f in iris_flag_L),
+            "review_right": sum(f == "review_excursion" for f in iris_flag_R),
+        },
         "aperture_landmarks_tracked": face_names,
         "outputs": {"overlay": str(out_dir / "tracking_overlay.mp4"),
                     "csv": str(out_dir / "tracking.csv"),
