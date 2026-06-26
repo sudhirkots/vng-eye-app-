@@ -1,5 +1,11 @@
 # EyeVNG Version 1 Implementation Plan
 
+> **⭐ V1 DESIGN UPDATE (2026-06-26): single-eye, EYE-LOCAL tracking.** V1 = track ONE user-selected
+> eye via its confirmed pupil + four eye-boundary landmarks (inner/outer canthus, upper/lower margin);
+> eye-local coords (0=inner→1=outer, 0=upper→1=lower); **no face/head landmarks**; MediaPipe is
+> proposal/fallback only. Canonical spec: **`VISION.md` → "VERSION 1 DESIGN — Single-Eye, Eye-Local
+> Tracking".** Binocular / head-impulse / VOR are future versions.
+
 > Tracking design → `docs/TRACKING_PHILOSOPHY.md` (source of truth). The revised staged order below
 > supersedes the older phase list further down for anything tracking-related.
 

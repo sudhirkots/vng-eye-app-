@@ -1,5 +1,14 @@
 # EyeVNG Tracking Philosophy (Revised)
 
+> **⭐ V1 DESIGN UPDATE (2026-06-26): single-eye, EYE-LOCAL tracking.** For Version 1 the clinical
+> trace is built from ONE user-selected eye and its four eye-boundary landmarks (inner/outer canthus,
+> upper/lower margin) + the confirmed pupil — **NO face/nose/cheek/tragus/head-pose**. The eye-local
+> coordinate system (horizontal 0=inner→1=outer canthus, vertical 0=upper→1=lower margin) replaces the
+> canthus-midpoint / affine head-correction as the clinical signal. MediaPipe is
+> proposal/fallback/reacquisition/quality only — never the per-frame measurement. Canonical spec:
+> **`VISION.md` → "VERSION 1 DESIGN — Single-Eye, Eye-Local Tracking".** The head-motion-compensation
+> section below (affine, canthus-relative) is retained for the FUTURE head-impulse/VOR module.
+
 **Status: SOURCE OF TRUTH for all tracking-related design decisions.** Where any other document
 (`VISION.md`, `SYSTEM_ARCHITECTURE.md`, `IMPLEMENTATION_PLAN.md`,
 `STABLE_TRACKING.md`, `HANDOFF.md`) disagrees about how anatomy/pupils are tracked, this document

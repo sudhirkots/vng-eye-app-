@@ -38,6 +38,35 @@ class EyeObs:
     single_y: Optional[float] = None
     iris_radius: Optional[float] = None   # MediaPipe iris radius (for concentricity check)
     pupil_contrast: float = 0.0     # how much darker the pupil is than the iris (0..1)
+    ear: Optional[float] = None     # eye-aspect-ratio (lid gap / eye width); low ⇒ eye closing/blink
+
+
+# eyelid landmark sets for the eye-aspect-ratio (vertical lid gap / horizontal eye width).
+# left eye  (iris 468-472): upper lid 386, lower lid 374, corners 362 (inner) & 263 (outer)
+# right eye (iris 473-477): upper lid 159, lower lid 145, corners 133 (inner) & 33  (outer)
+LEFT_EAR = (386, 374, 362, 263)
+RIGHT_EAR = (159, 145, 133, 33)
+
+# Eye-aperture landmarks: the 4 corners per eye that define the eye-local coordinate box.
+#   L eye (iris 468-472): inner canthus 362, outer canthus 263, upper lid 386, lower lid 374
+#   R eye (iris 473-477): inner canthus 133, outer canthus 33,  upper lid 159, lower lid 145
+# "inner" = nasal corner, "outer" = temporal corner; "upper"/"lower" = lid margins.
+APERTURE = {
+    "inner_canthus_L": 362, "outer_canthus_L": 263, "upper_margin_L": 386, "lower_margin_L": 374,
+    "inner_canthus_R": 133, "outer_canthus_R": 33,  "upper_margin_R": 159, "lower_margin_R": 145,
+}
+
+
+def _ear(pts, up, lo, c1, c2):
+    """Eye-aspect-ratio: vertical eyelid gap divided by horizontal eye width. Position-independent
+    blink signal — it reflects lid closure, not where the pupil is, so flagging blinks with it never
+    suppresses real eye movement (nystagmus/saccades)."""
+    try:
+        v = np.hypot(pts[up][0] - pts[lo][0], pts[up][1] - pts[lo][1])
+        hh = np.hypot(pts[c1][0] - pts[c2][0], pts[c1][1] - pts[c2][1])
+        return float(v / hh) if hh > 1e-6 else None
+    except (IndexError, TypeError):
+        return None
 
 
 def _iris_center(points, idxs):
@@ -107,6 +136,32 @@ def pupil_contrast(gray, cx, cy, pr, iris_r):
     return float(np.clip((annulus.mean() - pupil.mean()) / 255.0, 0.0, 1.0))
 
 
+def dark_centroid(gray, cx, cy, r):
+    """Stable IRIS centre = intensity-weighted centroid of the dark iris disc in a circular ROI around
+    (cx, cy). The iris+pupil are the darkest region inside the limbus; averaging the centre over the
+    whole dark disc (hundreds of px) cancels boundary/segmentation noise → far less jitter than a
+    single landmark. The ROI is kept ~iris-sized so eyelashes/lids mostly stay out. Returns (x, y)|None."""
+    H, W = gray.shape
+    R = int(max(6, 1.15 * r))
+    x0, y0 = max(0, int(cx - R)), max(0, int(cy - R))
+    x1, y1 = min(W, int(cx + R)), min(H, int(cy + R))
+    roi = gray[y0:y1, x0:x1].astype(np.float32)
+    if roi.size < 16:
+        return None
+    yy, xx = np.ogrid[:roi.shape[0], :roi.shape[1]]
+    cxr, cyr = cx - x0, cy - y0
+    circ = (xx - cxr) ** 2 + (yy - cyr) ** 2 <= R * R
+    vals = roi[circ]
+    if vals.size < 8:
+        return None
+    thr = float(np.percentile(vals, 45))            # darkest ~45% inside the ROI ≈ iris + pupil
+    w = np.where(circ & (roi <= thr), thr - roi, 0.0)   # weight by how much darker than the threshold
+    s = float(w.sum())
+    if s < 1.0:
+        return None
+    return (float((w * xx).sum() / s) + x0, float((w * yy).sum() / s) + y0)
+
+
 class PupilDetector:
     """MediaPipe iris detector (ring-mean). Used for init and as the tracking backup."""
 
@@ -124,7 +179,7 @@ class PupilDetector:
         gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
         pts = [(lm[i].x * w, lm[i].y * h) for i in range(len(lm))]
 
-        def eye(iris_idx, ring):
+        def eye(iris_idx, ring, ear_idx):
             ic = _iris_center(pts, iris_idx)
             if ic is None:
                 return EyeObs(False)
@@ -132,15 +187,18 @@ class PupilDetector:
             px, py, pr = refine_pupil(gray, ix, iy, ir)  # → dark pupil (centre + radius), concentric
             contrast = pupil_contrast(gray, px, py, pr, ir)
             return EyeObs(True, px, py, _eye_confidence(pts, ring, ix, iy), pr,
-                          single_x=ix, single_y=iy, iris_radius=ir, pupil_contrast=contrast)
+                          single_x=ix, single_y=iy, iris_radius=ir, pupil_contrast=contrast,
+                          ear=_ear(pts, *ear_idx))
 
-        return True, eye(LEFT_IRIS, LEFT_EYE_RING), eye(RIGHT_IRIS, RIGHT_EYE_RING)
+        return True, eye(LEFT_IRIS, LEFT_EYE_RING, LEFT_EAR), eye(RIGHT_IRIS, RIGHT_EYE_RING, RIGHT_EAR)
 
     def face_landmarks(self, frame_bgr):
-        """Propose the facial anatomical landmarks for user confirmation (see
-        TRACKING_PHILOSOPHY.md). Returns {name: (x, y) or None}. Paired structures
-        are assigned patient-side by image x (image-left = patient's right, per
-        COORDINATE_SYSTEM.md). None = landmark falls outside the frame (unavailable)."""
+        """Propose the EYE-APERTURE landmarks for user confirmation — the 4 aperture corners per eye
+        that define the eye-local coordinate box (see TRACKING_PHILOSOPHY.md). At the current clinical
+        stage NO nose/cheek/tragus/face landmarks are used: the clinical trace is pupil motion WITHIN
+        the eye opening, which these four landmarks (all moving with the eye) fully define — so head
+        translation/camera movement cancels without any face/head reference. Returns {name:(x,y)|None};
+        None = landmark outside the frame (unavailable)."""
         h, w = frame_bgr.shape[:2]
         res = self.fm.process(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB))
         if not res.multi_face_landmarks:
@@ -153,13 +211,7 @@ class PupilDetector:
         def avail(p):
             return None if not (0 <= p[0] < w and 0 <= p[1] < h) else p
 
-        out = {"nose_bridge_mid": P(6), "nose_tip": P(1)}
-        for (ia, ib), name in (((50, 280), "cheek"), ((234, 454), "tragus"),
-                               ((33, 263), "outer_canthus"), ((133, 362), "inner_canthus")):
-            pa, pb = P(ia), P(ib)
-            r_pt, l_pt = (pa, pb) if pa[0] < pb[0] else (pb, pa)   # smaller x = patient's right
-            out[f"{name}_R"] = r_pt
-            out[f"{name}_L"] = l_pt
+        out = {name: P(i) for name, i in APERTURE.items()}
         return {k: avail(v) for k, v in out.items()}
 
 
@@ -198,14 +250,16 @@ def select_init_frame(detector: PupilDetector, video_path, scan_frames: int = 15
 @dataclass
 class Track:
     status: str                     # initialized|tracked|uncertain|blink_or_occluded|reacquired|lost
-    x: Optional[float]
+    x: Optional[float]              # VALID pupil position — None during blink/occlusion/jump (never invented)
     y: Optional[float]
     radius: Optional[float] = None
     confidence: str = "none"        # high|medium|low|none
     score: float = 0.0              # template-match correlation
-    raw_x: Optional[float] = None   # MediaPipe backup point, when consulted
+    raw_x: Optional[float] = None   # ALWAYS the detected centre (preserved even when invalid)
     raw_y: Optional[float] = None
     rejected: bool = False
+    artifact_type: str = "none"     # none|blink|occlusion|motion_blur|tracking_jump|uncertain
+    ear: Optional[float] = None     # eye-aspect-ratio at this frame
 
 
 _SEVERITY = {"lost": 5, "blink_or_occluded": 4, "uncertain": 3,
@@ -255,6 +309,13 @@ class StableTracker:
         self.anchor = max(10.0, 0.02 * (interocular or 100.0))
         self.blink_to_lost = blink_to_lost
         self.corrections = []
+        # --- blink / artifact detection state (per eye) ---
+        self.ear_base = {"L": None, "R": None}   # adaptive open-eye EAR baseline
+        self.ear_close_frac = 0.62               # blink when EAR < 62% of the open baseline
+        self.ear_alpha = 0.04                    # slow EMA so a brief blink can't pull the baseline down
+        # "impossible jump" set FAR above any real saccade/nystagmus beat (those are tens of px), so a
+        # genuine fast phase is never mistaken for an artifact — only a teleport (lid/brow grab) trips it.
+        self.blink_jump = max(60.0, 0.55 * (interocular or 100.0))
         if init_left:
             self._make_template(init_gray, "L", init_left, left_radius)
         if init_right:
@@ -294,20 +355,47 @@ class StableTracker:
         return res[1] if key == "L" else res[2]
 
     def _step_eye(self, key, gray, mp_detect) -> Track:
+        """Track the marked IRIS as a single physical object: each frame searches LOCALLY around the
+        previous iris position for the best template match — NO per-frame MediaPipe. MediaPipe is
+        consulted ONLY when the local match fails (blink/occlusion/loss) to re-acquire the iris.
+        This is 'stop detecting, start tracking': the marker stays attached to the same iris and does
+        not jitter back toward a per-frame re-estimate."""
         if not self.enabled[key]:
             return Track("lost", None, None)
-        # MediaPipe locates the eye every frame (it follows the head robustly). The pupil is
-        # anatomically CONCENTRIC with the iris, so the stable, drift-free, side-jump-free pupil
-        # centre is the iris centre — not a template hunting within the eye (that drifts/side-jumps).
-        # Radius is the user-approved value. (Small residual jitter can be reduced later by an
-        # explicit, opt-in filter — never silently.)
+        r = self.radius[key] or 12.0
+        win = max(18.0, 2.5 * r)                       # local search window (covers fast eye movement)
+        prev = self.prev[key]
+
+        # --- NORMAL TRACKING: local template match, no MediaPipe ---
+        score, pos = self._match(gray, key, prev, win) if prev is not None else (0.0, None)
+        if pos is not None and score >= self.med:
+            reacq = self.lost_count[key] > 0
+            self.lost_count[key] = 0
+            self.prev[key] = pos
+            self.last_reliable[key] = pos
+            conf = "high" if score >= self.high else "medium"
+            status = "reacquired" if reacq else ("tracked" if score >= self.high else "uncertain")
+            return Track(status, pos[0], pos[1], r, conf, score,
+                         raw_x=pos[0], raw_y=pos[1], artifact_type="none")
+
+        # --- iris not confidently found locally → blink / occlusion / loss. MediaPipe ONLY to reacquire ---
+        self.lost_count[key] += 1
         obs = self._eye_obs(mp_detect, key)
-        if not obs.detected:
-            return Track("blink_or_occluded", None, None, None, "none")
-        conf = "high" if obs.conf >= 0.6 else "medium"
-        status = "tracked" if conf == "high" else "uncertain"
-        self.prev[key] = (obs.x, obs.y)
-        return Track(status, obs.x, obs.y, self.radius[key], conf, obs.conf, obs.single_x, obs.single_y)
+        last = self.last_reliable[key]
+        if obs.detected and last is not None and np.hypot(obs.x - last[0], obs.y - last[1]) <= self.reacq_win:
+            # verify the iris template actually matches near MediaPipe's proposal before trusting it
+            s2, p2 = self._match(gray, key, (obs.x, obs.y), win)
+            cx, cy = (p2 if (p2 is not None and s2 >= self.med) else (obs.x, obs.y))
+            self._make_template(gray, key, (cx, cy), r)   # refresh the template at re-acquisition
+            self.prev[key] = (cx, cy)
+            self.last_reliable[key] = (cx, cy)
+            self.lost_count[key] = 0
+            return Track("reacquired", cx, cy, r, "medium", max(score, s2),
+                         raw_x=cx, raw_y=cy, artifact_type="none")
+        status = "blink_or_occluded" if self.lost_count[key] <= self.blink_to_lost else "lost"
+        return Track(status, None, None, None, "none", score,
+                     raw_x=(pos[0] if pos else None), raw_y=(pos[1] if pos else None),
+                     artifact_type="occlusion")
 
     def _reacquire(self, key, gray, mp_detect) -> Track:
         obs = self._eye_obs(mp_detect, key)

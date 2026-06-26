@@ -22,8 +22,10 @@ import numpy as np
 from dataclasses import replace
 
 from src.core.filters import PointFilter
-from src.core.pupil_tracking import (FaceLandmarkTracker, PupilDetector, StableTracker, Track,
-                                     frame_status, select_init_frame)
+from src.core.pupil_tracking import (APERTURE, FaceLandmarkTracker, PupilDetector, StableTracker,
+                                     Track, frame_status, select_init_frame)
+
+APERTURE_NAMES = tuple(APERTURE.keys())   # the 8 eye-aperture landmark names (4 per eye)
 
 # Explicit display de-shimmer via a DEADBAND: hold the marker while it moves less than
 # DEADBAND_PX (kills steady-eye jitter) but snap to it immediately on any larger, real movement
@@ -135,7 +137,10 @@ def _eye_crop(frame, cx, cy, half=70):
 
 FACE_CODE = {"nose_bridge_mid": "Nb", "nose_tip": "Nt", "cheek_R": "ChR", "cheek_L": "ChL",
              "tragus_R": "TrR", "tragus_L": "TrL", "outer_canthus_R": "OcR", "outer_canthus_L": "OcL",
-             "inner_canthus_R": "IcR", "inner_canthus_L": "IcL"}
+             "inner_canthus_R": "IcR", "inner_canthus_L": "IcL",
+             # eye-aperture margins (V1 eye-local landmarks)
+             "upper_margin_R": "UpR", "upper_margin_L": "UpL",
+             "lower_margin_R": "LoR", "lower_margin_L": "LoL"}
 
 
 def propose_init(video_path, output_dir="outputs"):
@@ -359,7 +364,8 @@ def approve(video_path, output_dir="outputs", auto=False):
     fr, frame, le, re = init
     # fresh detector: select_init_frame advanced this detector's MediaPipe tracking state, so
     # re-processing the (earlier) init frame with it can fail — a clean instance detects reliably.
-    faces = PupilDetector().face_landmarks(frame) or {}
+    faces_raw = PupilDetector().face_landmarks(frame) or {}
+    faces = apply_landmark_calibration(faces_raw)   # pre-correct toward the clinician's learned placement
     detected = {"L": (le.x, le.y, le.radius) if le.detected else None,
                 "R": (re.x, re.y, re.radius) if re.detected else None}
 
@@ -370,6 +376,11 @@ def approve(video_path, output_dir="outputs", auto=False):
     else:
         print("Stage 0: drag points to correct them, wheel/[ ] resize pupils, d=off/on, Enter=APPROVE.")
         confirmed, faces_out = approve_interactive(frame, le, re, faces)
+        # LEARN: fold the clinician's corrections (vs the RAW MediaPipe proposal) into the calibration
+        learned = update_calibration(faces_out, faces_raw)
+        if learned:
+            print(f"Learned landmark calibration (from {learned['n_samples']} clip(s)): "
+                  f"{json.dumps({k: {kk: round(vv, 3) for kk, vv in v.items()} for k, v in learned['offsets'].items()})}")
     if confirmed["L"] is None and confirmed["R"] is None:
         raise SystemExit("No usable eye approved.")
 
@@ -418,6 +429,14 @@ def draw_overlay(frame, scale, lt: Track, rt: Track, fstatus, fr, t, face_tracks
             rad = int((tr.radius or 10) * scale)
             cv2.circle(vis, p, max(3, rad), col, 2)      # tracked pupil CIRCLE
             cv2.circle(vis, p, 2, col, -1)               # centre point
+        elif tr.raw_x is not None and tr.status in ("blink_or_occluded", "uncertain"):
+            # INVALID frame (blink/occlusion/jump): show where MediaPipe thought the pupil was, as a
+            # BLUE cross — explicitly NOT a confident green circle. Position is not reported as valid.
+            p = (int(tr.raw_x * scale), int(tr.raw_y * scale))
+            cv2.drawMarker(vis, p, BLUE, cv2.MARKER_TILTED_CROSS, 14, 2)
+            if tr.artifact_type and tr.artifact_type != "none":
+                cv2.putText(vis, tr.artifact_type, (p[0] + 10, p[1]),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, BLUE, 1)
         if tr.rejected and tr.raw_x is not None:
             cv2.drawMarker(vis, (int(tr.raw_x * scale), int(tr.raw_y * scale)), RED,
                            cv2.MARKER_TILTED_CROSS, 12, 2)
@@ -429,30 +448,69 @@ def draw_overlay(frame, scale, lt: Track, rt: Track, fstatus, fr, t, face_tracks
     return vis
 
 
-def plot_trace(times, series, title, path, w=1100, h=420, flags=None):
+def plot_trace(times, series, title, path, w=1100, h=420, flags=None, zero_each=False,
+               robust=True, shade=None, scale_exclude=None):
     """Simple OpenCV line plot (no matplotlib dependency). series = {label:(vals,color)};
     vals may contain None (gaps left blank — blink/lost are not interpolated). flags = optional
-    list of bools per time index; True draws a red tick at the bottom (e.g. poor-quality frame)."""
+    list of bools per time index; True draws a red tick at the bottom (e.g. poor-quality frame).
+
+    robust=True clips the y-range to percentiles so a SINGLE glitch/blink frame can't squash the
+    whole trace (the real signal then fills the plot; glitches clip off-edge and are red-ticked).
+    zero_each=True de-means each series by its own median, so eyes at very different absolute x
+    overlay around 0 and small nystagmus beats become visible instead of a flat 1300 px scale."""
     img = 255 * np.ones((h, w, 3), np.uint8)
     ml, mr, mt, mb = 70, 20, 40, 50
     pw, ph = w - ml - mr, h - mt - mb
-    allv = [v for vals, _ in series.values() for v in vals if v is not None]
+    if zero_each:
+        dm = {}
+        for label, (vals, color) in series.items():
+            ok = [v for v in vals if v is not None]
+            med = float(np.median(ok)) if ok else 0.0
+            dm[label] = ([(v - med) if v is not None else None for v in vals], color)
+        series = dm
+    # y-scaling values: optionally EXCLUDE flagged frames (e.g. degenerate-aperture) so a minority of
+    # bad frames can't blow out the scale and squash the real signal. They're still plotted (clamped).
+    if scale_exclude:
+        def _keep(i):
+            return not (i < len(scale_exclude) and scale_exclude[i])
+        allv = [v for vals, _ in series.values() for i, v in enumerate(vals) if v is not None and _keep(i)]
+        if len(allv) < 10:
+            allv = [v for vals, _ in series.values() for v in vals if v is not None]
+    else:
+        allv = [v for vals, _ in series.values() for v in vals if v is not None]
     if not allv or not times:
         cv2.imwrite(str(path), img); return
-    ymin, ymax = min(allv), max(allv)
-    if ymax - ymin < 1:
-        ymax, ymin = ymax + 1, ymin - 1
+    if robust and len(allv) >= 20:
+        a = np.array(allv, float)
+        med = float(np.median(a))
+        mad = float(np.median(np.abs(a - med))) or 1e-6
+        inl = a[np.abs(a - med) <= 8.0 * mad]          # drop wild outliers from the SCALE only
+        base = inl if len(inl) >= 10 else a
+        lo, hi = (float(x) for x in np.percentile(base, [2, 98]))
+        ymin, ymax = (lo, hi) if hi - lo > 1e-6 else (float(a.min()), float(a.max()))
+    else:
+        ymin, ymax = min(allv), max(allv)
+    pad = 0.08 * (ymax - ymin) if ymax > ymin else 1.0
+    ymin -= pad; ymax += pad
+    if ymax - ymin < 1e-6:           # only guard a truly FLAT trace (avoid div-by-zero), not a small range
+        ymax, ymin = ymax + 0.5, ymin - 0.5
     tmax = max(times) or 1.0
     def X(t): return int(ml + pw * t / tmax)
-    def Y(v): return int(mt + ph * (1 - (v - ymin) / (ymax - ymin)))
+    def Y(v): return int(min(mt + ph, max(mt, mt + ph * (1 - (v - ymin) / (ymax - ymin)))))
+    if shade:                                   # light bands over blink/occlusion periods (behind trace)
+        for tt, s in zip(times, shade):
+            if s:
+                x = X(tt)
+                cv2.line(img, (x, mt), (x, mt + ph), (225, 225, 225), 1)
     if flags:
         for t, fl in zip(times, flags):
             if fl:
                 cv2.line(img, (X(t), mt + ph), (X(t), mt + ph - 10), (0, 0, 255), 1)
     cv2.rectangle(img, (ml, mt), (ml + pw, mt + ph), (0, 0, 0), 1)
     cv2.putText(img, title, (ml, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
-    cv2.putText(img, f"{ymax:.0f}", (8, mt + 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
-    cv2.putText(img, f"{ymin:.0f}", (8, mt + ph), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+    yfmt = "%.2f" if (ymax - ymin) < 10 else "%.0f"   # 0..1 eye-local needs decimals; px traces don't
+    cv2.putText(img, yfmt % ymax, (8, mt + 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+    cv2.putText(img, yfmt % ymin, (8, mt + ph), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
     cv2.putText(img, f"{tmax:.1f}s", (ml + pw - 40, mt + ph + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
     leg = ml + 10
     for label, (vals, color) in series.items():
@@ -637,6 +695,136 @@ def canthus_relative(pupil, inner, outer):
     return float(np.dot(vec, ux)), float(np.dot(vec, uy))
 
 
+def eye_local(pupil, inner, outer, upper, lower):
+    """Pupil position in EYE-LOCAL (eye-aperture) coordinates — the current clinical trace. Uses only
+    this eye's own four aperture corners, so it is inherently independent of head/camera movement (no
+    face/head landmarks needed). Convention:
+        x: 0 = inner canthus  →  1 = outer canthus   (projection on the inner→outer axis)
+        y: 0 = upper margin   →  1 = lower margin     (projection on the upper→lower axis)
+    0.5 ≈ centred. Values may run slightly outside [0,1] at gaze extremes. Returns (x, y); either is
+    None if its landmark pair is missing/degenerate or the pupil is invalid (blink)."""
+    if not pupil or pupil[0] is None:
+        return None, None
+
+    def proj(a, b):                          # normalised projection of pupil onto axis a→b (a=0, b=1)
+        if a is None or b is None:
+            return None
+        ax, ay = b[0] - a[0], b[1] - a[1]
+        L2 = ax * ax + ay * ay
+        if L2 < 1.0:
+            return None
+        return ((pupil[0] - a[0]) * ax + (pupil[1] - a[1]) * ay) / L2
+
+    return proj(inner, outer), proj(upper, lower)
+
+
+def eye_velocity(times, v, fast_k=3.0):
+    """Frame-to-frame velocity of an eye-local series (per second), with gaps preserved (None where
+    either endpoint is invalid — blink). Returns (vel, fast) aligned to times[1:]: `fast` flags
+    fast-phase candidates (|velocity| > fast_k × median |velocity|), so a jerk-nystagmus reset shows
+    as a marked spike opposite the slow drift. vel is in eye-local units/s (1.0 = inner→outer span/s)."""
+    vel = []
+    for i in range(1, len(v)):
+        dt = times[i] - times[i - 1]
+        if v[i] is not None and v[i - 1] is not None and dt > 0:
+            vel.append((v[i] - v[i - 1]) / dt)
+        else:
+            vel.append(None)
+    mags = [abs(x) for x in vel if x is not None]
+    thr = fast_k * float(np.median(mags)) if mags else 0.0
+    fast = [x is not None and thr > 0 and abs(x) > thr for x in vel]
+    return vel, fast
+
+
+# ----------------------------------------------------------------------------- learned landmark calibration
+# Learn the clinician's systematic placement of the eye-aperture landmarks RELATIVE to MediaPipe's
+# proposal, so future proposals start closer to where the clinician actually marks (e.g. the upper
+# margin sits well above MediaPipe's lid landmark). Offsets are stored per landmark TYPE in each eye's
+# OWN frame and normalised by inter-canthal distance, so they transfer across clips, zoom, and side.
+CALIB_PATH = Path(__file__).resolve().parent / "landmark_calibration.json"
+APERTURE_TYPES = ("inner_canthus", "outer_canthus", "upper_margin", "lower_margin")
+
+
+def _eye_frame(inner, outer, upper, lower):
+    """Eye-local basis: D = inter-canthal distance, u = inner→outer (unit), w = upper→lower (unit)."""
+    I, O = np.array(inner, float), np.array(outer, float)
+    D = float(np.hypot(*(O - I)))
+    if D < 1.0:
+        return None
+    u = (O - I) / D
+    a = np.array(lower, float) - np.array(upper, float)
+    na = float(np.hypot(*a))
+    w = a / na if na > 1.0 else np.array([-u[1], u[0]])
+    return D, u, w
+
+
+def load_calibration(calib_path=CALIB_PATH):
+    try:
+        return json.loads(Path(calib_path).read_text())
+    except Exception:
+        return {"n_samples": 0, "offsets": {}}
+
+
+def _clip_offsets(user, mp):
+    """Per-landmark-type (du along inner→outer, dw along upper→lower), D-normalised, averaged L+R."""
+    samples = {t: [] for t in APERTURE_TYPES}
+    for eye in ("L", "R"):
+        nm = {t: f"{t}_{eye}" for t in APERTURE_TYPES}
+        if not all(user.get(nm[t]) and mp.get(nm[t]) for t in APERTURE_TYPES):
+            continue
+        fr = _eye_frame(user[nm["inner_canthus"]], user[nm["outer_canthus"]],
+                        user[nm["upper_margin"]], user[nm["lower_margin"]])
+        if fr is None:
+            continue
+        D, u, w = fr
+        for t in APERTURE_TYPES:
+            corr = np.array(user[nm[t]], float) - np.array(mp[nm[t]], float)
+            samples[t].append((float(np.dot(corr, u) / D), float(np.dot(corr, w) / D)))
+    return {t: (float(np.mean([s[0] for s in v])), float(np.mean([s[1] for s in v])))
+            for t, v in samples.items() if v}
+
+
+def update_calibration(user, mp, calib_path=CALIB_PATH):
+    """Fold this clip's clinician-vs-MediaPipe offsets into the running calibration (a simple mean)."""
+    this = _clip_offsets(user, mp)
+    if not this:
+        return None
+    calib = load_calibration(calib_path)
+    n = int(calib.get("n_samples", 0))
+    offs = dict(calib.get("offsets", {}))
+    for t, (du, dw) in this.items():
+        old = offs.get(t)
+        offs[t] = ({"du": (old["du"] * n + du) / (n + 1), "dw": (old["dw"] * n + dw) / (n + 1)}
+                   if old else {"du": du, "dw": dw})
+    out = {"n_samples": n + 1, "offsets": offs}
+    Path(calib_path).write_text(json.dumps(out, indent=2))
+    return out
+
+
+def apply_landmark_calibration(proposal, calib=None):
+    """Shift a fresh MediaPipe aperture proposal toward the clinician's learned placement."""
+    calib = calib if calib is not None else load_calibration()
+    offs = calib.get("offsets") or {}
+    if not offs or not proposal:
+        return proposal
+    out = dict(proposal)
+    for eye in ("L", "R"):
+        nm = {t: f"{t}_{eye}" for t in APERTURE_TYPES}
+        if not all(proposal.get(nm[t]) for t in APERTURE_TYPES):
+            continue
+        fr = _eye_frame(proposal[nm["inner_canthus"]], proposal[nm["outer_canthus"]],
+                        proposal[nm["upper_margin"]], proposal[nm["lower_margin"]])
+        if fr is None:
+            continue
+        D, u, w = fr
+        for t in APERTURE_TYPES:
+            o = offs.get(t)
+            if o:
+                p = np.array(proposal[nm[t]], float) + D * (o["du"] * u + o["dw"] * w)
+                out[nm[t]] = (float(p[0]), float(p[1]))
+    return out
+
+
 def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adaptive", show_raw=True,
         eye="auto"):
     video_path = Path(video_path)
@@ -672,8 +860,20 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
     ok, init_frame = cap.read()
     init_gray = cv2.cvtColor(init_frame, cv2.COLOR_BGR2GRAY) if ok else np.zeros((height, width), np.uint8)
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+    # IRIS template size: the tracked object is the whole iris, so size the template to the IRIS radius
+    # (from MediaPipe at the init frame), not the small pupil — picked per eye by nearest iris centre.
+    _, le0, re0 = detector.detect(init_frame) if ok else (False, None, None)
+    def _iris_r(center, fallback):
+        cands = [(o.single_x, o.single_y, o.iris_radius) for o in (le0, re0)
+                 if o and o.detected and o.iris_radius]
+        if not cands or center is None:
+            return float(fallback or 12.0)
+        cx, cy = center
+        return float(min(cands, key=lambda c: (c[0] - cx) ** 2 + (c[1] - cy) ** 2)[2])
+    lr = _iris_r((L[0], L[1]) if L else None, L[2] if L else None)
+    rr = _iris_r((R[0], R[1]) if R else None, R[2] if R else None)
     tracker = StableTracker(init_gray, (L[0], L[1]) if L else None, (R[0], R[1]) if R else None,
-                            L[2] if L else 0.0, R[2] if R else 0.0, interocular)
+                            lr, rr, interocular)
     face_appr = approved.get("face_landmarks") or {}
     init_face_mp = (detector.face_landmarks(init_frame) or {}) if (face_appr and ok) else {}
     face_tracker = FaceLandmarkTracker(face_appr, init_face_mp) if face_appr else None
@@ -696,14 +896,20 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
     csv_f = (out_dir / "tracking.csv").open("w", newline="", encoding="utf-8")
     cw = csv.writer(csv_f)
     cw.writerow(["frame_number", "timestamp_ms", "time_sec",
+                 # raw_* = always the detected centre (preserved, incl. blinks); valid_* = blank during
+                 # blink/occlusion/jump (never invented). Interpret eye movement from valid_*, not raw_*.
                  "raw_left_pupil_x", "raw_left_pupil_y", "raw_right_pupil_x", "raw_right_pupil_y",
+                 "valid_left_pupil_x", "valid_left_pupil_y", "valid_right_pupil_x", "valid_right_pupil_y",
                  "filtered_left_pupil_x", "filtered_left_pupil_y",
                  "filtered_right_pupil_x", "filtered_right_pupil_y",
-                 "corrected_left_eye_h", "corrected_left_eye_v",
-                 "corrected_right_eye_h", "corrected_right_eye_v",
-                 "transform_quality", "transform_residual_px", "landmark_count_used",
+                 # EYE-LOCAL (clinical) coords: x 0=inner→1=outer canthus, y 0=upper→1=lower margin
+                 "left_eye_local_x", "left_eye_local_y",
+                 "right_eye_local_x", "right_eye_local_y",
+                 "aperture_quality", "transform_residual_px", "landmark_count_used",
                  "left_pupil_radius", "right_pupil_radius",
                  "tracking_status_left", "tracking_status_right",
+                 "artifact_type_left", "artifact_type_right",
+                 "ear_left", "ear_right",
                  "confidence_left", "confidence_right"])
 
     face_csv_f = fcw = None
@@ -724,6 +930,8 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
     rlx, rly, rrx, rry = [], [], [], []      # RAW left/right x/y (image space)
     flx, fly, frx, fry = [], [], [], []      # FILTERED left/right x/y (image space)
     cor_lh, cor_lv, cor_rh, cor_rv = [], [], [], []   # RAW head-corrected eye-in-head (not over-filtered)
+    art_L, art_R = [], []                    # per-frame artifact_type per eye (blink/occlusion/jump/none)
+    stat_L, stat_R = [], []                  # per-frame tracking status per eye (for reacquisition stats)
     poor_flags = []                          # True where transform quality is poor/degenerate
     q_counts = {}                            # transform quality tally
     tracked_series = []
@@ -784,35 +992,62 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
             tr = face_tracks.get(name)
             return (tr.x, tr.y) if tr and tr.x is not None else None
 
-        def _near(pupil, kind):     # pair the pupil with ITS OWN eye's canthus (nearest one)
-            cands = [c for c in (_pt(kind + "_canthus_L"), _pt(kind + "_canthus_R")) if c]
-            if not cands or pupil[0] is None:
-                return None
-            return min(cands, key=lambda c: (c[0] - pupil[0]) ** 2 + (c[1] - pupil[1]) ** 2)
+        # EYE-LOCAL coordinates — THE clinical trace: pupil position WITHIN this eye's aperture box
+        # (inner/outer canthus + upper/lower margin). Head/frame independent; uses NO face/head pose.
+        # Built from the VALID pupil (lt.x/y) so blink frames stay gaps. x: 0=inner→1=outer canthus;
+        # y: 0=upper→1=lower margin. (cor_* arrays now hold eye-local x/y, not the old canthus pixels.)
+        def _aperture_for(pupil):
+            # Pair the pupil with its OWN eye's aperture by proximity — robust to whatever L/R
+            # convention the pupil vs the landmark naming happen to use (they can differ).
+            if pupil[0] is None:
+                return (None, None, None, None)
+            best = None
+            for s in ("L", "R"):
+                ic, oc = _pt("inner_canthus_" + s), _pt("outer_canthus_" + s)
+                if ic and oc:
+                    mx, my = (ic[0] + oc[0]) / 2, (ic[1] + oc[1]) / 2
+                    dd = (mx - pupil[0]) ** 2 + (my - pupil[1]) ** 2
+                    if best is None or dd < best[0]:
+                        best = (dd, s)
+            if best is None:
+                return (None, None, None, None)
+            s = best[1]
+            return (_pt("inner_canthus_" + s), _pt("outer_canthus_" + s),
+                    _pt("upper_margin_" + s), _pt("lower_margin_" + s))
 
-        clh, clv = canthus_relative((lt.x, lt.y), _near((lt.x, lt.y), "inner"), _near((lt.x, lt.y), "outer"))
-        crh, crv = canthus_relative((rt.x, rt.y), _near((rt.x, rt.y), "inner"), _near((rt.x, rt.y), "outer"))
-        n_used = sum(_pt(n) is not None for n in ("inner_canthus_L", "outer_canthus_L",
-                                                  "inner_canthus_R", "outer_canthus_R"))
+        clh, clv = eye_local((lt.x, lt.y), *_aperture_for((lt.x, lt.y)))
+        crh, crv = eye_local((rt.x, rt.y), *_aperture_for((rt.x, rt.y)))
+
+        def _san(v):     # eye-local is ~0..1; anything well outside means a bad/mis-paired landmark
+            return v if (v is not None and -0.5 <= v <= 1.5) else None
+        clh, clv, crh, crv = _san(clh), _san(clv), _san(crh), _san(crv)
+        n_used = sum(_pt(n) is not None for n in APERTURE_NAMES)
         quality = "good" if (clh is not None and crh is not None) else \
                   ("fair" if (clh is not None or crh is not None) else "degenerate")
         residual = None
         q_counts[quality] = q_counts.get(quality, 0) + 1
         poor_flags.append(quality == "degenerate")
 
+        # raw_* = always-detected centre (preserved); valid (lt.x/y) is None during blink/occlusion/jump.
+        l_raw = (lt.raw_x if lt.raw_x is not None else lt.x, lt.raw_y if lt.raw_y is not None else lt.y)
+        r_raw = (rt.raw_x if rt.raw_x is not None else rt.x, rt.raw_y if rt.raw_y is not None else rt.y)
         times.append(round(t, 4))
-        rlx.append(lt.x); rly.append(lt.y); rrx.append(rt.x); rry.append(rt.y)
+        rlx.append(l_raw[0]); rly.append(l_raw[1]); rrx.append(r_raw[0]); rry.append(r_raw[1])
         flx.append(flx_); fly.append(fly_); frx.append(frx_); fry.append(fry_)
         cor_lh.append(clh); cor_lv.append(clv); cor_rh.append(crh); cor_rv.append(crv)
+        art_L.append(lt.artifact_type); art_R.append(rt.artifact_type)
+        stat_L.append(lt.status); stat_R.append(rt.status)
         tracked_series.append((flx_, fly_) if flx_ is not None else None)
 
         cw.writerow([fr, int(round(t * 1000)), round(t, 4),
+                     _r(l_raw[0]), _r(l_raw[1]), _r(r_raw[0]), _r(r_raw[1]),
                      _r(lt.x), _r(lt.y), _r(rt.x), _r(rt.y),
                      _r(flx_), _r(fly_), _r(frx_), _r(fry_),
                      _r(clh), _r(clv), _r(crh), _r(crv),
                      quality, _r(residual), n_used,
                      _r(lt.radius), _r(rt.radius),
-                     lt.status, rt.status, lt.confidence, rt.confidence])
+                     lt.status, rt.status, lt.artifact_type, rt.artifact_type,
+                     _r(lt.ear), _r(rt.ear), lt.confidence, rt.confidence])
 
         if fcw:
             row = [fr, round(t, 4)]
@@ -836,16 +1071,18 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
 
         vis = draw_overlay(frame, scale, lt, rt, fstatus, fr, t, face_tracks)
         if show_both:
-            chans = [("Horizontal  eye-in-socket (pupil vs canthi)   L green / R blue",
+            chans = [("Eye-local H  (0 inner canthus -> 1 outer)   L green / R blue",
                       [(cor_lh, GREEN), (cor_rh, BLUE)]),
-                     ("Vertical   L green / R blue", [(cor_lv, GREEN), (cor_rv, BLUE)])]
+                     ("Eye-local V  (0 upper -> 1 lower)   L green / R blue",
+                      [(cor_lv, GREEN), (cor_rv, BLUE)])]
         else:
             e = chosen_eye or ("R" if valid_R >= valid_L else "L")
             col = GREEN if e == "L" else BLUE
             side = "LEFT eye" if e == "L" else "RIGHT eye"
-            chans = [(f"Horizontal  eye-in-socket (pupil vs canthi)   {side}",
+            chans = [(f"Eye-local H  (0 inner canthus -> 1 outer)   {side}",
                       [(cor_lh if e == "L" else cor_rh, col)]),
-                     ("Vertical", [(cor_lv if e == "L" else cor_rv, col)])]
+                     ("Eye-local V  (0 upper margin -> 1 lower)",
+                      [(cor_lv if e == "L" else cor_rv, col)])]
         canvas = np.zeros((out_h, ow, 3), np.uint8)   # video on top, trace strip below (eyes never covered)
         canvas[:oh] = vis
         cv2.line(canvas, (0, oh), (ow, oh), (60, 60, 60), 1)
@@ -860,33 +1097,71 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
     if face_csv_f:
         face_csv_f.close()
 
-    # H/V traces: FILTERED as the main line; raw faint in the background if --show-raw-trace
+    # blink/occlusion shading per eye (light bands behind the trace; valid_* is None there so the
+    # line already breaks — the band makes the excluded period explicit).
+    blink_L = [a in ("blink", "occlusion") for a in art_L]
+    blink_R = [a in ("blink", "occlusion") for a in art_R]
+    blink_any = [a or b for a, b in zip(blink_L, blink_R)]
+
+    # ---- RAW IMAGE-SPACE traces — DEBUG ONLY (include head movement; NOT the clinical trace) ----
     GRAY = (170, 170, 170)
     h_series = {"L filt": (flx, GREEN), "R filt": (frx, BLUE)}
     v_series = {"L filt": (fly, GREEN), "R filt": (fry, BLUE)}
     if show_raw:
         h_series = {"L raw": (rlx, GRAY), "R raw": (rrx, GRAY), **h_series}
         v_series = {"L raw": (rly, GRAY), "R raw": (rry, GRAY), **v_series}
-    plot_trace(times, h_series, "Horizontal pupil position (px) vs time", out_dir / "trace_horizontal.png")
-    plot_trace(times, v_series, "Vertical pupil position (px) vs time", out_dir / "trace_vertical.png")
-    # verification: raw vs filtered, left-eye horizontal (confirm shimmer down, fast moves preserved)
-    plot_trace(times, {"raw": (rlx, GRAY), "filtered": (flx, GREEN)},
-               f"Left pupil horizontal - RAW vs FILTERED ({filter_mode})",
-               out_dir / "trace_raw_vs_filtered.png")
-    # EYE-IN-SOCKET (canthus-relative) traces — single eye by default, both only for --eye both
-    # (raw corrected, not over-filtered; red ticks = poor/degenerate frames).
+    plot_trace(times, h_series, "Raw image-space pupil X (de-meaned) - NOT CLINICAL (includes head movement)",
+               out_dir / "trace_image_x.png", zero_each=True, shade=blink_any)
+    plot_trace(times, v_series, "Raw image-space pupil Y (de-meaned) - NOT CLINICAL (includes head movement)",
+               out_dir / "trace_image_y.png", zero_each=True, shade=blink_any)
+
+    # ---- EYE-LOCAL traces — THE CLINICAL VNG TRACE: pupil position within the eye aperture ----
+    # single eye by default; both only for --eye both. Blink frames are GAPS + shaded; red ticks =
+    # frames where the aperture landmarks were degenerate.
     if show_both:
-        ch_h = {"L": (cor_lh, GREEN), "R": (cor_rh, BLUE)}
-        ch_v = {"L": (cor_lv, GREEN), "R": (cor_rv, BLUE)}
+        eh = {"L": (cor_lh, GREEN), "R": (cor_rh, BLUE)}
+        ev = {"L": (cor_lv, GREEN), "R": (cor_rv, BLUE)}
+        shade_eye, vel_src, vcol = blink_any, cor_lh, GREEN
     else:
         e = chosen_eye or ("R" if valid_R >= valid_L else "L")
-        nm, col = ("L", GREEN) if e == "L" else ("R", BLUE)
-        ch_h = {nm: (cor_lh if e == "L" else cor_rh, col)}
-        ch_v = {nm: (cor_lv if e == "L" else cor_rv, col)}
-    plot_trace(times, ch_h, "Eye-in-socket (pupil vs canthi) - HORIZONTAL (px) vs time",
-               out_dir / "trace_corrected_h.png", flags=poor_flags)
-    plot_trace(times, ch_v, "Eye-in-socket (pupil vs canthi) - VERTICAL (px) vs time",
-               out_dir / "trace_corrected_v.png", flags=poor_flags)
+        nm, vcol = ("L", GREEN) if e == "L" else ("R", BLUE)
+        eh = {nm: (cor_lh if e == "L" else cor_rh, vcol)}
+        ev = {nm: (cor_lv if e == "L" else cor_rv, vcol)}
+        shade_eye, vel_src = (blink_L if e == "L" else blink_R), (cor_lh if e == "L" else cor_rh)
+    plot_trace(times, eh, "Eye-local HORIZONTAL  (0 = inner canthus  ->  1 = outer canthus)  vs time",
+               out_dir / "trace_eyelocal_h.png", flags=poor_flags, shade=shade_eye, scale_exclude=poor_flags)
+    plot_trace(times, ev, "Eye-local VERTICAL  (0 = upper margin  ->  1 = lower margin)  vs time",
+               out_dir / "trace_eyelocal_v.png", flags=poor_flags, shade=shade_eye, scale_exclude=poor_flags)
+
+    # ---- EYE-LOCAL horizontal VELOCITY — reveals slow drift vs fast reset (jerk-nystagmus sawtooth) ----
+    vel, fast = eye_velocity(times, vel_src)
+    plot_trace(times[1:], {"d(eye-local x)/dt per s": (vel, vcol)},
+               "Eye-local horizontal VELOCITY (units/s)  -  red ticks = fast-phase candidates",
+               out_dir / "trace_eyelocal_velocity_h.png", flags=fast, shade=shade_eye[1:])
+
+    def blink_stats(arts, statuses):
+        """Blink/occlusion summary for one eye: invalid-frame count & %, number of blink EVENTS
+        (contiguous runs) with durations in frames and seconds, and reacquisition events."""
+        invalid = [a in ("blink", "occlusion") for a in arts]
+        runs, c = [], 0
+        for v in invalid:
+            if v:
+                c += 1
+            elif c:
+                runs.append(c); c = 0
+        if c:
+            runs.append(c)
+        n = max(1, len(arts))
+        return {
+            "invalid_frames": sum(invalid),
+            "pct_invalid": round(100.0 * sum(invalid) / n, 1),
+            "blink_events": len(runs),
+            "mean_blink_frames": round(st.mean(runs), 1) if runs else 0,
+            "mean_blink_ms": round(1000.0 * st.mean(runs) / fps, 0) if runs else 0,
+            "longest_blink_frames": max(runs) if runs else 0,
+            "tracking_jump_frames": sum(a == "tracking_jump" for a in arts),
+            "reacquisition_events": sum(s == "reacquired" for s in statuses),
+        }
 
     def jitter(xs, ys):
         pts = [(xs[i], ys[i]) if xs[i] is not None else None for i in range(len(xs))]
@@ -902,20 +1177,24 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
         "interocular_px": round(interocular, 1),
         "manual_corrections": tracker.corrections,
         "status_counts": counts,
+        "blink_left": blink_stats(art_L, stat_L),
+        "blink_right": blink_stats(art_R, stat_R),
         "filter": filter_mode,
         "display_eye": (eye if (show_both or forced) else (chosen_eye or "auto")),
         "jitter_left_raw_px": jitter(rlx, rly),
         "jitter_left_filtered_px": jitter(flx, fly),
-        "transform_quality_counts": q_counts,
-        "face_landmarks_tracked": face_names,
+        "aperture_quality_counts": q_counts,
+        "aperture_landmarks_tracked": face_names,
         "outputs": {"overlay": str(out_dir / "tracking_overlay.mp4"),
                     "csv": str(out_dir / "tracking.csv"),
-                    "face_landmarks_csv": (str(out_dir / "face_landmarks.csv") if face_tracker else None),
-                    "trace_horizontal": str(out_dir / "trace_horizontal.png"),
-                    "trace_vertical": str(out_dir / "trace_vertical.png"),
-                    "trace_raw_vs_filtered": str(out_dir / "trace_raw_vs_filtered.png"),
-                    "trace_corrected_h": str(out_dir / "trace_corrected_h.png"),
-                    "trace_corrected_v": str(out_dir / "trace_corrected_v.png")},
+                    "aperture_landmarks_csv": (str(out_dir / "face_landmarks.csv") if face_tracker else None),
+                    # CLINICAL (eye-local) traces:
+                    "trace_eyelocal_h": str(out_dir / "trace_eyelocal_h.png"),
+                    "trace_eyelocal_v": str(out_dir / "trace_eyelocal_v.png"),
+                    "trace_eyelocal_velocity_h": str(out_dir / "trace_eyelocal_velocity_h.png"),
+                    # debug only (image-space, includes head movement):
+                    "trace_image_x_debug": str(out_dir / "trace_image_x.png"),
+                    "trace_image_y_debug": str(out_dir / "trace_image_y.png")},
     }
     (out_dir / "metadata.json").write_text(json.dumps(metadata, indent=2))
     print(json.dumps(metadata, indent=2))

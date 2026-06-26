@@ -13,6 +13,73 @@
 > (development journal) → `docs/DEVELOPMENT_NOTES.md`.** This file holds the overall vision,
 > requirements, and build order.
 
+## ⭐ VERSION 1 DESIGN — Single-Eye, IRIS Tracking (DEFINITIVE, Dr. Kothari 2026-06-26)
+
+**Motto: "Detect once. Track forever."** Detection is only initialisation; tracking is the
+measurement. The clinical signal is continuous IRIS tracking within the eye opening.
+
+**Clinical principle.** We measure movement of the eyeball. The iris is rigidly attached to the
+eyeball, so tracking the iris is sufficient for horizontal/vertical eye movement. **We do NOT track
+the pupil separately** (the small pupil marker jitters; the iris has a strong, high-contrast boundary
+against the sclera and is larger and steadier). The iris centre is the eye-position measurement point.
+
+**1. Single eye.** V1 tracks ONE user-selected eye (left or right). The other eye may be detected by
+MediaPipe in the background but MUST NOT contribute to, average into, or alter the clinical trace.
+Binocular (INO, skew, disconjugate gaze) is a future version.
+
+**2. Initialisation — the clinician marks exactly FIVE structures for the selected eye** (and nothing
+else: no pupil, no face/nose/tragus/cheek/head-pose). Tracking must not begin until approved; these
+become the permanent anatomical reference for the recording:
+1. Medial (inner) canthus
+2. Lateral (outer) canthus
+3. Upper eye margin
+4. Lower eye margin
+5. **Iris boundary** (a circle/ellipse covering the whole visible iris)
+
+**3. Eye-local coordinate system (the clinical trace).** Defined ONLY by the four eye-boundary
+landmarks; the measured point is the **iris centre**:
+- Horizontal: iris centre on the medial→lateral canthus axis — **0 = inner canthus, 1 = outer canthus**.
+- Vertical: iris centre on the upper→lower margin axis — **0 = upper margin, 1 = lower margin**.
+Movement is WITHIN the eye opening, never within the face or frame. The four boundary landmarks move
+with the eye, so head/camera translation cancels — no face model or head pose at this stage.
+
+**4. Tracking = follow the marked iris as a single physical object.** After init, track the SAME iris
+continuously: each frame starts from the **previous** iris position and searches **locally**. Never
+re-detect the iris globally every frame. **MediaPipe is NOT the tracker** — it is used ONLY for
+(a) initial eye localisation, (b) recovery after complete tracking loss, (c) recovery after a
+prolonged blink/occlusion, (d) optional quality checking. MediaPipe must never adjust the iris
+position during normal tracking; the clinical trace must not depend on it frame-to-frame.
+
+**5. Eye selection / failure.** The user chooses the eye explicitly (`--eye left|right`). **No
+automatic eye switching** — if the selected eye fails, ASK before switching.
+
+**6. Blink handling.** Blink/occlusion frames are invalid → GAPS (never connected, interpolated, or
+allowed to look like a fast phase). After a blink, resume from the tracked iris; call MediaPipe only
+if tracking has truly failed.
+
+**7. Drift guards (a high template score is NOT proof of attachment).** A frame's iris position is
+trusted ONLY if it is anatomically plausible. Reject / mark `drift_suspected` (not valid eye movement)
+when: the iris centre leaves the marked aperture box; the iris radius/size changes substantially;
+frame-to-frame motion is physiologically implausible; or a large excursion can't be visually verified.
+**The trace is valid only if the overlay proves the iris marker stays anatomically attached.**
+
+**8. Version-1 clinical outputs.**
+1. Eye-local horizontal iris-centre position vs time
+2. Eye-local vertical iris-centre position vs time
+3. Overlay: selected eye, the four eye-boundary landmarks, the **tracked iris boundary**, iris centre, status
+4. Raw CSV (per frame): `frame_number, timestamp_ms, time_sec, selected_eye, iris_center_x_raw,
+   iris_center_y_raw, iris_radius_or_axes, eye_local_horizontal, eye_local_vertical,
+   iris_tracking_status, iris_tracking_confidence, blink_or_occlusion_status, artifact_type`
+5. Tracking quality report (incl. blink statistics)
+
+**Success criterion:** the overlay shows a marker that stays attached to the iris throughout, and the
+eye-local trace matches what an experienced vestibular clinician sees on the video.
+
+**Future modules** (only after V1 is stable): V2 head tracking / head-impulse / VOR; V3 binocular /
+disconjugate / INO / skew; V4 torsional (iris-texture rotation, using the already-tracked iris).
+
+---
+
 ## VNG Display Rules — LOCKED (Dr. Kothari, 2026-06-25)
 
 How the eye-movement trace is shown on/with the video. These are firm requirements:

@@ -1,5 +1,12 @@
 # EyeVNG Clinical Requirements
 
+> **⭐ V1 DESIGN UPDATE (2026-06-26): single-eye, EYE-LOCAL tracking.** The clinician marks ONE eye's
+> six landmarks (inner canthus, outer canthus, upper margin, lower margin, pupil centre, pupil radius);
+> the clinical trace is pupil movement WITHIN that eye's aperture — horizontal toward inner vs outer
+> canthus, vertical toward upper vs lower margin — **not** within the face or video frame. No
+> face/head landmarks at this stage. Canonical spec: **`VISION.md` → "VERSION 1 DESIGN — Single-Eye,
+> Eye-Local Tracking".**
+
 *This document captures the clinical reasoning behind EyeVNG design decisions. It is not a software
 architecture document — it explains **why** the software behaves the way it does. For tracking design
 see `docs/TRACKING_PHILOSOPHY.md`; for requirements/architecture see

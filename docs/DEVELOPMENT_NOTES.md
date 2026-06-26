@@ -95,10 +95,62 @@ what we learned**.
 
 ---
 
+## Session 2026-06-26 — pivot to single-eye EYE-LOCAL, then to IRIS tracking; the drift wall
+
+The day's arc: build the single-eye eye-local clinical trace → discover the pupil marker jitters →
+pivot to tracking the **iris as a physical object** ("detect once, track forever") → hit **template
+drift**. Canonical design now in `VISION.md` → "VERSION 1 DESIGN — Single-Eye, IRIS Tracking".
+
+**What we built & learned:**
+1. **Eye-local coordinate system** (`eye_local()` in `pupil_tracker.py`): iris/pupil centre projected
+   on the inner→outer canthus axis (x: 0 inner→1 outer) and the upper→lower margin axis (y: 0 up→1 lo).
+   Replaces the old canthus-midpoint pixel measure. Head/frame-independent; uses NO face/head pose.
+2. **Stage 0 = the 4 aperture corners + (now) the iris**, paired to the pupil by PROXIMITY (the pupil
+   L/R label and the aperture L/R label use opposite conventions — pair by nearest, never by label).
+3. **Axis-scale bug (big one):** a leftover `if ymax-ymin<1: inflate by ±1` guard in `plot_trace`
+   silently blew out EVERY normalised (0..1) eye-local plot to −1..2, hiding the signal. Fixed → guard
+   only a truly flat trace; robust y-scale now uses median±MAD + [2,98] pct, labels adaptive precision.
+4. **Learned landmark calibration** (`landmark_calibration.json`, `update_calibration`/
+   `apply_landmark_calibration`): each interactive `--approve` learns Dr. K's placement vs MediaPipe
+   (D-normalised, eye-local) and pre-corrects future proposals. Seeded n=1 from fistula: 24.3→8.6 px.
+   Big consistent offsets: upper margin ~0.21·D higher, outer canthus ~0.10·D more temporal.
+5. **Jitter hunt:** MediaPipe per-frame iris centre jitters ~6 px (steady). Tried, in order — iris
+   template-match anchored to MediaPipe (~7% better), dark-disc centroid anchored to MediaPipe (~5%).
+   All were still pulled by MediaPipe every frame → marginal. Conclusion: must STOP per-frame MediaPipe.
+6. **Pure local iris template tracking** (current `_step_eye`): local match from the previous position,
+   MediaPipe only on match failure. The iris template-matches *well* (median score 0.66). **BUT it
+   DRIFTS:** on a low-texture brown iris the fixed template matches similar nearby patches and wanders.
+   **Proven visually at fistula frame 302 (eye-local x=1.04): the green "iris" circle sat up on the
+   EYEBROW while the eye was centred — at HIGH confidence.** So: **template score ≠ attachment.** The
+   full-aperture trace swings (−0.21 … 1.04, physically impossible) were drift, not eye movement.
+
+**The wall / key lesson:** jitter-vs-drift tradeoff. MediaPipe-anchored = no drift but jitter; pure
+local fixed-template = smooth but drifts. Neither stays *attached* on a low-texture iris.
+
+## NEXT SESSION (2026-06-27) — make the iris marker provably attached
+Build BOTH (Dr. K approved direction):
+1. **Drift guards** — trust a frame ONLY if anatomically plausible: iris centre inside the aperture
+   box; iris radius/size stable; frame-to-frame motion physiologically plausible; large excursions
+   need visual verification. Else mark `drift_suspected` (NOT valid). Do not use template score alone
+   as confidence. Priority = visual attachment over numeric jitter.
+2. **Limbus circle-fit local tracker** (the real fix) — each frame, locally fit the iris/sclera
+   boundary circle (the highest-contrast feature; position-specific → can't sit on the brow, which has
+   no limbus; boundary-averaged → low jitter). Still local (search around previous centre), still no
+   per-frame MediaPipe. The fitted iris circle also feeds future torsion.
+   - **Feasibility probed 2026-06-26 (do NOT re-walk):** vanilla `cv2.HoughCircles` is UNRELIABLE on
+     this brown-iris clip — strict params find nothing (5/6 frames); loose params find circles but
+     9–48 px off the iris. So build a TAILORED limbus detector: take horizontal/directional gradients
+     to find the LEFT & RIGHT limbus arcs (the iris/sclera edges lids don't occlude), then robustly fit
+     a circle/ellipse (RANSAC) to those arc points; search locally around the previous centre.
+3. **Verification harness** (built today, keep using it): render enlarged single-eye frames at
+   start / mid / max-outer / max-inner / end with aperture + tracked iris boundary + centre + conf +
+   frame number → clinician confirms attachment before any trace is trusted. (`_drift_check.png` /
+   `_drift_*.png` in the fistula output dir are today's examples; frame 302 = the drift proof.)
+4. Then: rename pupil→iris across CSV/overlay/plots per the VISION CSV spec; size the Stage-0 circle to
+   the iris; update the 4 sibling docs; re-mark clips one by one with the 5-point scheme.
+
 ## Standing to-dos / open levers
-- Reduce shimmer at the source: intensity-weighted dark-pupil centroid / sub-pixel pupil-edge fit (the
-  real fix, since filtering can't).
 - A `--window t0 t1` zoom and an optional de-trended "beats" view for reading nystagmus.
 - Quantify: slow-phase velocity, beat frequency/direction (only after the trace is trusted).
-- Blink detection still approximate (needs a clip with clear blinks).
-- `head_pose.py` is a broken placeholder (separate fix).
+- `head_pose.py` is a broken placeholder (future V2 head module).
+- Per-machine local venv at `%USERPROFILE%\eyevng-venv` (OneDrive `.venv` is broken across machines).
