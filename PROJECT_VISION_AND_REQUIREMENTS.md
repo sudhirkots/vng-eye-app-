@@ -26,8 +26,9 @@ the centre of that estimated circle/ellipse is the clinical iris centre. **We do
 detect pupil darkness, or use pupil centre as the clinical point.**
 
 **1. Single eye.** V1 tracks ONE user-selected eye (left or right). The other eye may be detected by
-MediaPipe in the background but MUST NOT contribute to, average into, or alter the clinical trace.
-Binocular (INO, skew, disconjugate gaze) is a future version.
+MediaPipe in the background but MUST NOT contribute to, average into, or alter the per-eye
+clinical measurement signal (the contour-relative iris-centre series that feeds the V1 nystagmus
+detector). Binocular (INO, skew, disconjugate gaze) is a future version.
 
 **2. Initialisation — the clinician approves TWO anatomical objects for the selected eye** (and
 nothing else for V1: no pupil, no face/nose/tragus/cheek/head-pose). Tracking must not begin until
@@ -41,8 +42,9 @@ The medial canthus region, lateral canthus region, upper boundary, and lower bou
 from the tracked eye-opening contour geometry. They are not four independently tracked point
 landmarks.
 
-**3. Eye-local coordinate system (the clinical trace).** Defined by the tracked eye-opening contour;
-the measured point is the **limbus-derived iris-circle centre**:
+**3. Eye-local coordinate system (the internal clinical measurement signal — input to the V1
+nystagmus detector, NOT the V1 primary clinical display).** Defined by the tracked eye-opening
+contour; the measured point is the **limbus-derived iris-circle centre**:
 - Horizontal: iris-circle centre relative to the contour-derived medial and lateral extents.
 - Vertical: iris-circle centre relative to the contour-derived upper and lower extents.
 Movement is WITHIN the eye opening, never within the face or frame. The eye-opening contour moves
@@ -60,7 +62,8 @@ at this stage.
 After init, track the SAME iris boundary and SAME eye-opening contour continuously. Each frame starts
 from the previous state and searches locally. Never re-detect the iris globally every frame.
 **MediaPipe is NOT the tracker** — it is used ONLY for initial proposal/recovery/optional quality
-checking and must never adjust the clinical trace during normal tracking.
+checking and must never adjust the per-frame iris centre or the contour-relative measurement
+signal during normal tracking.
 
 **5. Eye selection / failure.** The user chooses the eye explicitly (`--eye left|right`). **No
 automatic eye switching** — if the selected eye fails, ASK before switching.
@@ -77,43 +80,135 @@ visible boundary, temporal continuity fails, or a large excursion cannot be visu
 Aperture/contour extent checks are coarse diagnostics, not the dominant validity gate.
 **The trace is valid only if the overlay proves the iris circle/ellipse stays anatomically attached.**
 
-**8. Version-1 clinical outputs.**
-1. Eye-local horizontal iris-circle-centre position vs time
-2. Eye-local vertical iris-circle-centre position vs time
-3. Overlay: selected eye, visible eye-opening contour, visible limbus arc, estimated full iris
-   circle/ellipse, iris-circle centre, state, confidence
-4. Raw CSV (per frame): `frame_number, timestamp_ms, time_sec, selected_eye, iris_center_x_raw,
-   iris_center_y_raw, iris_radius_or_axes, eye_local_horizontal, eye_local_vertical,
-   iris_tracking_status, iris_tracking_confidence, blink_or_occlusion_status, artifact_type`
-5. Tracking quality report (incl. blink statistics)
+**8. Version-1 clinical outputs.** The PRIMARY user-facing output for V1 is **nystagmus
+detection + beating-direction arrows on the overlay video**, NOT a VNG-style position graph. The
+eye-local position trace is still computed internally as the *analysis input* — it is a hidden
+signal, not the main display.
 
-**Success criterion:** the overlay shows the estimated iris circle/ellipse attached to the visible
-limbus throughout, and the contour-relative eye-local trace matches what an experienced vestibular
-clinician sees on the video.
+1. **Overlay video (PRIMARY)** — the selected eye with: visible eye-opening contour, visible limbus
+   arc, estimated full iris circle/ellipse, iris-circle centre marker, tracking state/confidence,
+   AND when nystagmus is detected, a **clear arrow + label** indicating the beating direction
+   (Left-beating ←, Right-beating →, Up-beating ↑, Down-beating ↓, Oblique ↗/↘, Torsional CW/CCW —
+   torsional only if a rotation signal is implemented; otherwise marked "torsion not assessed").
+   When no nystagmus is detected, the overlay shows "No nystagmus detected" (or similar) without an
+   arrow. The clinical anatomical word ("Left" / "Right") is the user-facing eye label.
+2. **Nystagmus detection report** — per-clip and per-segment:
+   - `nystagmus_present` (bool) on the whole clip and per analysis window
+   - `beating_direction` ∈ {left, right, up, down, oblique, torsional, none}
+   - `direction_consistency`, `rhythmicity`, `n_beats`, `mean_beat_rate_hz`, `confidence`
+   - per-segment timing of detected nystagmus windows
+   - `torsional_status` ∈ {not_assessed, present_cw, present_ccw, absent} — **`not_assessed` by
+     default** since iris-centre motion cannot detect torsion; torsion requires iris-texture
+     rotation tracking (future module).
+3. **Raw CSV (per frame, internal analysis signal)** — preserved exactly as today so reviewers can
+   audit any detection result: `frame_number, timestamp_ms, time_sec, selected_image_eye,
+   selected_patient_eye, iris_center_x_raw, iris_center_y_raw, iris_radius_or_axes,
+   eye_local_horizontal, eye_local_vertical, iris_tracking_status, iris_tracking_confidence,
+   blink_or_occlusion_status, artifact_type`. The CSV is NOT the primary clinical output; it is the
+   analysis input and the audit trail.
+4. **Internal traces** — the eye-local horizontal/vertical position vs time MAY be retained as
+   debug/analysis artefacts (PNG plots saved to the output directory), but they are NOT presented
+   as the primary clinical result. They exist for verification, not for clinical reading.
+5. **Tracking quality report** (incl. blink statistics, best-eye selection record) — unchanged.
+
+**Success criterion:**
+1. The overlay shows the estimated iris circle/ellipse attached to the visible limbus throughout,
+   AND
+2. When the clip contains repeated rhythmic jerk nystagmus, the overlay displays the correct
+   beating-direction arrow within a few beats of onset; when the clip contains only random saccades
+   or steady gaze, no arrow is shown.
 
 **Future modules** (only after V1 is stable): V2 head tracking / head-impulse / VOR; V3 binocular /
 disconjugate / INO / skew; V4 torsional (iris-texture rotation, using the already-tracked iris).
 
 ---
 
-## VNG Display Rules — LOCKED (Dr. Kothari, 2026-06-25)
+## ⭐ Nystagmus Detection — V1 PRIMARY OUTPUT (Dr. Kothari, 2026-06-27)
 
-How the eye-movement trace is shown on/with the video. These are firm requirements:
+The user-facing goal of V1 is to answer two clinical questions on the overlay video:
 
-1. **Single eye by default.** Conjugate nystagmus on both eyes is redundant and confusing — show ONE
-   eye. Show BOTH only when the eyes differ, e.g. **internuclear ophthalmoplegia** (one eye nystagmus,
-   the other not). CLI: `--eye auto|left|right|both` (default `auto` = single best-tracked eye). The
-   CSV always keeps BOTH eyes (data integrity); this rule is about the *display* only.
-2. **Trace synced to the video** (a moving time cursor on the trace tracks playback).
-3. **No opaque band over the video.** A dark/translucent panel over the face obscures it — not allowed.
-4. **The trace must NEVER cover the eyes.** Because the source clips zoom/pan over the eyes, any
-   on-video overlay eventually lands on them. RESOLUTION: render the trace in a **dedicated strip BELOW
-   the video** (extend the canvas downward; video pixels untouched, eyes always fully visible).
-5. **Signal shown = contour-relative ("eye-in-socket")** — iris-circle centre measured against that
-   eye's own tracked eye-opening contour. The contour-derived medial/lateral/upper/lower extents
-   define the corrected coordinate system.
+1. **Is nystagmus present?**
+2. **If present, what is the beating direction?**
+   left-beating · right-beating · up-beating · down-beating · oblique (↗ / ↘) · torsional (CW / CCW,
+   only if a torsional/rotation signal is implemented).
 
-Implemented in `iris_tracker.py` (`superimpose_traces`, `run`) + `app.py` (`--eye`). Uncommitted.
+**Nystagmus definition for V1.** Nystagmus is a *repeated, rhythmic, involuntary eye movement
+pattern with consistent fast phases in one direction*. Random-looking movements, isolated saccades,
+gaze shifts, smooth pursuit, and single beats are NOT nystagmus and must not be labelled as such.
+
+**Detection principle (applied to the selected best eye):**
+1. Use the contour-relative iris-circle-centre signal (the existing eye-local trace) as the
+   **internal analysis input** — it is no longer the primary clinical *display*.
+2. Analyse in sliding time windows.
+3. Identify candidate fast phases.
+4. Require **repeated beats** (at least N beats within the window).
+5. Require **direction consistency** of the fast phases.
+6. Require **approximate rhythmicity** (inter-beat intervals within tolerance).
+7. **Reject isolated or random eye movements** — failing any of (4) / (5) / (6) → no nystagmus.
+8. Label the direction by the **fast-phase** direction (clinical convention).
+
+**Torsion exception.** Iris-circle-centre motion CANNOT detect torsion. Torsion requires iris-
+texture rotation tracking inside the iris circle. Therefore the report MUST mark
+`torsional_status: not_assessed` unless a rotation signal is implemented.
+
+**Display principle (overlay video, PRIMARY clinical UI):**
+
+When nystagmus is detected, show a clear arrow and short label on the overlay video for as long
+as detection holds. Use the simple anatomical eye word ("Left" / "Right") established in the
+nomenclature mapping; never use bare image-side `L` / `R` in user-facing UI.
+
+| Direction | Arrow | Overlay label |
+|---|---|---|
+| Left-beating  | ← | "Left-beating nystagmus" |
+| Right-beating | → | "Right-beating nystagmus" |
+| Up-beating    | ↑ | "Up-beating nystagmus" |
+| Down-beating  | ↓ | "Down-beating nystagmus" |
+| Oblique up-right | ↗ | "Oblique nystagmus (up-right)" |
+| Oblique up-left  | ↖ | "Oblique nystagmus (up-left)" |
+| Oblique down-right | ↘ | "Oblique nystagmus (down-right)" |
+| Oblique down-left  | ↙ | "Oblique nystagmus (down-left)" |
+| Torsional CW  | ↻ | "Torsional (clockwise)" — only if rotation signal exists |
+| Torsional CCW | ↺ | "Torsional (counter-clockwise)" — only if rotation signal exists |
+| None detected | — | "No nystagmus detected" (small caption; no arrow) |
+
+**Hard rules — DO NOT:**
+- Do not present a velocity graph or VNG-style position trace as the primary clinical UI.
+- Do not block / obscure the eyes with overlay text or arrows; arrows are drawn in a safe region.
+- Do not label sustained drift, single saccades, or random gaze shifts as nystagmus.
+- Do not invent torsional output from centre motion alone.
+- Do not reintroduce pupil tracking. Do not make MediaPipe mandatory.
+
+**Internal analysis artefacts still allowed (debug-only).** The eye-local position vs time, the
+horizontal velocity plot, and the CSV are kept for auditability and developer verification. They
+are no longer the primary clinical display. They live in the output directory but the overlay is
+the artefact a clinician reads.
+
+---
+
+## Overlay Layout Rules (LOCKED, Dr. Kothari)
+
+How the overlay video is composed. These are firm requirements:
+
+1. **Single eye by default.** Conjugate nystagmus on both eyes is redundant — analyse and label ONE
+   eye. Show BOTH eyes' labels only when the eyes differ (INO, skew, dysconjugate, strabismus,
+   research). The CSV always keeps BOTH eyes (data integrity); this rule is about the *overlay
+   labelling* only.
+2. **The overlay must NEVER cover the eyes.** Because the source clips zoom/pan over the eyes, any
+   on-video overlay can eventually land on them. The arrow + nystagmus label is rendered in a
+   safe region (e.g. a band above/below the face, or in a corner with sufficient padding) — not on
+   the eyes themselves.
+3. **Debug/internal traces (when rendered for development) go in a dedicated strip below the
+   video** — extend the canvas downward; video pixels untouched. These traces are debug-only and
+   are not the primary clinical artefact.
+4. **Anatomical eye labels only.** The user sees "Left" / "Right" (the patient's anatomical eye),
+   never bare `L` / `R` or verbose `image L / patient R` strings. The image↔patient mapping lives
+   in metadata.
+5. **Internal analysis signal = contour-relative ("eye-in-socket")** — iris-circle centre measured
+   against that eye's own tracked eye-opening contour. The contour-derived medial/lateral/upper/
+   lower extents define the corrected coordinate system. This is the input to nystagmus detection;
+   it is not the primary display.
+
+Implemented in `iris_tracker.py` (`draw_overlay`, `draw_composite`, `run`) + `app.py` (`--eye`).
 
 ## Project Vision
 
@@ -141,7 +236,8 @@ The platform should eventually support:
 * Ocular flutter
 * Opsoclonus
 
-However, diagnosis is NOT the current goal.
+However, diagnosis is NOT the current goal. V1 reports whether nystagmus is present and its
+beating direction; it does not attribute, classify, or treat.
 
 ---
 
@@ -149,16 +245,19 @@ However, diagnosis is NOT the current goal.
 
 The project must be built from the bottom up.
 
-Order of importance:
+Order of importance (V1):
 
-1. Reliable eye tracking
-2. Reliable eye movement traces
-3. Reliable torsional tracking
-4. Nystagmus detection
-5. Head impulse analysis
-6. Diagnostic interpretation
+1. Reliable iris-circle tracking inside the eye-opening contour (limbus + contour primary)
+2. Reliable internal contour-relative iris-centre signal (analysis input — not a primary display)
+3. **Nystagmus detection: presence + beating direction (← → ↑ ↓ ↗ ↖ ↘ ↙) — the V1 primary
+   clinical output, shown as an arrow + label on the overlay video**
+4. Torsional nystagmus detection (REQUIRES iris-texture rotation tracking; until that exists,
+   torsion is reported as `not_assessed`)
+5. Head impulse analysis (future module)
+6. Diagnostic interpretation (out of scope for V1)
 
-No diagnosis should be attempted until the tracking system is trustworthy.
+No diagnosis should be attempted until the tracking system AND the nystagmus detector are
+trustworthy on the reference clips.
 
 ---
 
@@ -418,7 +517,9 @@ Confidence should be visible on overlay and exported.
 
 # Overlay Video Requirements
 
-Overlay must display:
+The overlay video is the **PRIMARY clinical output** for V1. It must display:
+
+Anatomy and tracking (the verification layer):
 
 * tracked eye-opening contour
 * contour-derived medial/lateral/upper/lower limits
@@ -430,27 +531,24 @@ Overlay must display:
 * frame number
 * timestamp
 
-Colour coding:
+Clinical result (the V1 primary output layer):
 
-Green:
+* anatomical eye label ("Left" / "Right") next to the analysed eye
+* when nystagmus is detected: a clear directional arrow (← → ↑ ↓ ↗ ↖ ↘ ↙) plus a short label
+  ("Left-beating nystagmus", "Up-beating nystagmus", "Oblique nystagmus (up-right)", etc.)
+* when no nystagmus is detected: a small "No nystagmus detected" caption
+* torsional status — when no torsional/rotation signal is implemented, the overlay shows
+  "Torsion: not assessed"; never invent a torsional label from centre motion alone
 
-* confident tracking
+Colour coding (tracking layer):
 
-Yellow:
+Green: confident tracking
+Yellow: uncertain tracking
+Blue: blink or occlusion
+Red: tracking lost
 
-* uncertain tracking
-
-Blue:
-
-* blink or occlusion
-
-Red:
-
-* tracking lost
-
-Overlay video is considered one of the most important outputs.
-
-It is the primary quality-control tool.
+The arrow + nystagmus label must NEVER cover the eyes. The overlay is both the primary clinical
+artefact AND the primary quality-control tool.
 
 ---
 
@@ -504,18 +602,20 @@ head_roll
 
 # Immediate Outputs Required
 
-For every video:
+For every video, in priority order:
 
-1. Overlay video
-2. Raw CSV
-3. Metadata JSON
-4. Horizontal trace
-5. Vertical trace
+1. **Overlay video with nystagmus arrow + label** — PRIMARY clinical output
+2. **Nystagmus detection report (JSON)** — `nystagmus_present`, `beating_direction`, per-segment
+   timings, direction consistency, rhythmicity, beat count, mean beat rate, confidence,
+   `torsional_status` (default `not_assessed`)
+3. Metadata JSON (best-eye selection record + tracking quality summary)
+4. Raw CSV (internal analysis input + audit trail)
+5. *Debug-only:* horizontal trace, vertical trace, velocity plot — saved to the output directory
+   for verification, NOT presented as the clinical result
 6. Tracking quality report
 
-No diagnosis.
-
-No classification.
+V1 detects nystagmus presence and beating direction. V1 does NOT diagnose a vestibular disorder,
+classify a pattern as central vs peripheral, attribute causation, or recommend treatment.
 
 ---
 
@@ -607,19 +707,23 @@ Current objective:
 
 Upload Video
 ↓
-Confirm Iris
+Confirm Iris + Eye-Opening Contour (Stage 0 approval)
 ↓
-Track Iris Reliably
+Track Iris Circle within Eye-Opening Contour Reliably
 ↓
-Handle Blinks
+Handle Blinks Honestly (gaps, not interpolation)
 ↓
-Generate Overlay
+Compute Internal Eye-Local Signal (analysis input)
 ↓
-Export Raw CSV
+DETECT NYSTAGMUS (repeated rhythmic fast phases)
 ↓
-Generate Simple Traces
+Render Overlay with Beating-Direction Arrow + Label  ← V1 PRIMARY OUTPUT
+↓
+Export Raw CSV + Nystagmus Detection Report + Debug Traces (audit trail)
 
-Nothing beyond this stage should be implemented until tracking quality is clinically believable.
+Nothing beyond this stage should be implemented until both (a) iris-circle tracking inside the
+contour is clinically believable AND (b) the arrow direction matches a vestibular clinician's
+reading on the reference clips.
 
 ---
 
@@ -627,12 +731,17 @@ Nothing beyond this stage should be implemented until tracking quality is clinic
 
 A vestibular neurologist watches the overlay video and says:
 
-"The marker is genuinely attached to the iris and follows it smoothly through the recording."
+1. "The iris circle stays attached to the eye throughout the clip."
+2. "When there is nystagmus, the arrow appears and points the correct way; when there isn't, no
+   arrow appears."
+
+Both must hold. The internal contour-relative trace need only be inspectable for verification — it
+is not what the clinician reads.
 
 Only after this is achieved should the project move to:
 
-* VNG metrics
-* Nystagmus detection
+* Torsional nystagmus detection (needs iris-texture rotation tracking)
 * Head impulse analysis
-* Torsional analysis
+* VOR estimation
+* Binocular / INO / skew analysis
 * Diagnostic interpretation

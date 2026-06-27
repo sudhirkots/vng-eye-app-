@@ -1,11 +1,19 @@
 # EYEVNG TRACKING SPECIFICATION
 
-> **Status: DRAFT FOR APPROVAL — 2026-06-26.** Authoritative engineering specification for the
-> EyeVNG Version 1 tracking engine. This is the contract the implementation must satisfy. It is not
-> pseudocode and not implementation. Once approved, code is written *from* this document; the
-> architecture is frozen (see §J). Supersedes the engine portions of `STABLE_TRACKING.md`; consistent
-> with `VISION.md`, `docs/TRACKING_PHILOSOPHY.md`, `MULTIFEATURE_TRACKER_DESIGN.md`, and
+> **Status: DRAFT FOR APPROVAL — 2026-06-26 (V1 primary-output amendment 2026-06-27).**
+> Authoritative engineering specification for the EyeVNG Version 1 tracking engine and the V1
+> nystagmus detector that consumes it. This is the contract the implementation must satisfy. It is
+> not pseudocode and not implementation. Once approved, code is written *from* this document; the
+> architecture is frozen (see §J). Supersedes the engine portions of `STABLE_TRACKING.md`;
+> consistent with `VISION.md`, `docs/TRACKING_PHILOSOPHY.md`, `MULTIFEATURE_TRACKER_DESIGN.md`, and
 > `docs/FEATURE_PROBE_FINDINGS.md`.
+
+> **⭐ V1 PRIMARY OUTPUT (2026-06-27).** The user-facing clinical artefact of V1 is the
+> **overlay video carrying a nystagmus arrow + label** when nystagmus is detected, NOT a
+> VNG-style position graph. The tracking engine specified in §A–§J produces the per-frame
+> measurements; the **nystagmus detector (§K)** consumes the contour-relative iris-centre signal
+> from those measurements and emits the clinical result. Position/velocity traces are RETAINED as
+> internal analysis input and debug artefacts only.
 
 ---
 
@@ -14,8 +22,9 @@
 The tracking engine is governed by these established principles:
 
 1. **One eye (V1).** A single user-selected eye is tracked. The other eye may be detected but must
-   never average into, alter, or contribute to the clinical trace. Binocular work is a later version
-   that *reuses* this engine, not a redesign.
+   never average into, alter, or contribute to the per-eye clinical measurement signal (the
+   contour-relative iris-centre series that feeds the V1 nystagmus detector). Binocular work is a
+   later version that *reuses* this engine, not a redesign.
 2. **Track the limbus / iris boundary, not the pupil.** The iris is rigidly attached to the eyeball,
    so iris motion is eyeball motion. V1 fits or estimates the full iris circle/ellipse from the
    visible limbus / iris-sclera boundary. No pupil concept, pupil centre, pupil darkness, or
@@ -375,17 +384,29 @@ n_active, n_trusted, ear`.
 Raw (always-detected) values are preserved separately; clinical (valid) values are blank on gaps and
 never interpolated.
 
-### Overlay elements (`tracking_overlay.mp4` + debug frames)
-- The video frame with the eye fully visible (trace strip rendered **below** the video, never over the
-  eyes).
+### Overlay elements (`tracking_overlay.mp4` + debug frames) — V1 PRIMARY clinical artefact
+
+Anatomy / tracking layer (verification):
+- The video frame with the eye fully visible. Any debug trace strip, when rendered for
+  development, goes **below** the video, never over the eyes.
 - The tracked eye-opening contour and its derived medial/lateral/upper/lower extents.
 - The visible limbus arc points.
 - The estimated full iris circle/ellipse.
 - The limbus-derived iris-circle centre marker.
 - Optional helper features: **green = trusted/active, amber = probation, red = lost** this frame.
 - A state/`drift_reason` banner and the `frame_confidence` value.
-- The live eye-local trace panel synced to playback.
 - Saved representative debug frames on drift / blink / state changes.
+
+Clinical layer (V1 primary):
+- The anatomical eye label ("Left" / "Right") next to the analysed eye.
+- When the nystagmus detector (§K) reports nystagmus for the current window: a clear directional
+  arrow (← → ↑ ↓ ↗ ↖ ↘ ↙) plus a short label ("Left-beating nystagmus", "Up-beating nystagmus",
+  "Oblique nystagmus (up-right)", "Torsional (clockwise)" — torsional only when a rotation signal
+  exists; otherwise the overlay shows "Torsion: not assessed").
+- When no nystagmus is detected: a small caption such as "No nystagmus detected".
+- Arrows and labels MUST be drawn in a region that never covers the eyes.
+- A live eye-local trace panel is **debug-only**, opt-in for development; it is not the V1
+  clinical display.
 
 ### Metadata (`metadata.json` = `TrackingReport`)
 Clip info; displayed eye; per-eye summaries; drift statistics (counts by reason); feature-survival
@@ -432,21 +453,135 @@ requires changing the V1 rule that the clinical centre comes from the estimated 
 
 Every future modification to the tracker is validated against the same artefacts before acceptance:
 
-1. **Overlay video** — the estimated iris circle/ellipse must remain visibly attached to the real
-   limbus / iris-sclera boundary throughout.
-2. **Eye-local traces** — the clinical horizontal/vertical traces, with gaps and drift ticks.
+1. **Overlay video (PRIMARY clinical artefact)** — the estimated iris circle/ellipse must remain
+   visibly attached to the real limbus / iris-sclera boundary throughout, AND when the clip
+   contains repeated rhythmic jerk nystagmus the overlay must display the correct
+   beating-direction arrow within a few beats of onset (and no arrow when the clip contains only
+   random saccades, smooth pursuit, drift, or steady gaze).
+2. **Eye-local traces** — debug-only horizontal/vertical position plots, with gaps and drift
+   ticks. Used to audit the detector input, not as the V1 clinical display.
 3. **Known clinical videos** — the reference set: a clean clip (e.g., `2.mp4`) and a hard clip
-   (e.g., the fistula clip), plus the nystagmus clips.
+   (e.g., the fistula clip), plus the nystagmus clips. The nystagmus clips are now the primary
+   acceptance set for §K.
 4. **Drift statistics** — counts by reason; must not regress (no new false drift on coherent motion).
 5. **Reference and helper survival** — contour confidence, limbus fit quality, and optional helper
    pool sizes / survival across the clip.
 6. **Frame confidence** — distribution and per-clip `tracking_confidence`; must not regress.
+7. **Nystagmus detection accuracy (§K)** — on the reference nystagmus clips the detector must
+   report the correct beating direction; on the clean clip it must NOT report nystagmus during
+   steady gaze. Must not regress.
 
-**Acceptance rule:** no implementation is accepted unless the overlay remains anatomically correct -
-the iris circle/ellipse stays attached to the limbus, the eye-opening contour stays attached to the
-palpebral fissure, and every drift/blink/reference-uncertain frame is honestly flagged rather than plotted. A
-fixed verification montage (init, mid, maximum inner excursion, maximum outer excursion, end) is the
-standing acceptance test.
+**Acceptance rule:** no implementation is accepted unless (a) the overlay remains anatomically
+correct — the iris circle/ellipse stays attached to the limbus, the eye-opening contour stays
+attached to the palpebral fissure, every drift/blink/reference-uncertain frame is honestly flagged
+rather than plotted — AND (b) the nystagmus arrow matches a vestibular clinician's reading on the
+reference clips. A fixed verification montage (init, mid, maximum inner excursion, maximum outer
+excursion, end, plus a representative nystagmus segment with arrow visible) is the standing
+acceptance test.
+
+---
+
+## K. Nystagmus detection (V1 primary clinical output)
+
+The detector consumes the contour-relative iris-centre signal (`eye_local` from
+`FrameMeasurement`, §C) of the SELECTED BEST EYE (see best-eye selector in
+`iris_tracker.run()`). It emits a per-window classification and a per-clip summary used to drive
+the overlay arrow. The detector does NOT alter any tracking output; it only adds analysis fields.
+
+### K.1 Definition (clinical)
+
+Nystagmus, for V1 purposes, is a *repeated, rhythmic, involuntary eye movement pattern with
+consistent fast phases in one direction*. Random-looking movements, isolated saccades, gaze
+shifts, smooth pursuit, sustained drift, and single beats are NOT nystagmus and must not be
+labelled as such.
+
+### K.2 Inputs
+
+- `eye_local` time series (h, v) ∈ [0,1] for the selected eye, with gaps preserved (blink / drift /
+  reference_uncertain frames are gaps, not interpolated).
+- `frame_confidence` per frame — gates whether a window is analysable.
+- `state`, `validity`, `drift_flag` — used to exclude invalid frames from the rhythm analysis.
+
+### K.3 Detection principle
+
+Apply a sliding analysis window over the selected-eye contour-relative signal:
+
+1. **Pre-conditions per window.** Sufficient fraction of valid frames; sufficient mean
+   `frame_confidence`; otherwise the window emits `nystagmus_present: false` with reason
+   `insufficient_signal`.
+2. **Candidate fast phases.** Identify rapid, brief excursions in (h, v) consistent with
+   nystagmus fast phases (short rise time, large signed step relative to noise floor, return /
+   recovery in the slow phase). Smooth pursuit and gaze shifts are excluded by duration / shape /
+   non-repetition.
+3. **Repeated beats.** A window must contain **≥ N_beats** candidate fast phases.
+4. **Direction consistency.** The fast-phase direction vectors must be aligned (e.g., dominant
+   axis identified by their resultant; consistency = fraction of fast phases within a tolerance
+   cone around the resultant).
+5. **Approximate rhythmicity.** Inter-beat intervals must lie within a tolerance band around their
+   median (or, equivalently, the dominant frequency in the fast-phase train must be well-defined).
+6. **Rejection.** Failing **any** of (3), (4), (5) → `nystagmus_present: false`. Isolated
+   movements, smooth pursuit, drift, and random saccades are rejected by construction.
+
+### K.4 Direction labelling
+
+The window's beating direction is the fast-phase direction (clinical convention). The dominant
+axis chosen from the resultant of the fast-phase vectors maps to:
+
+| Resultant direction (eye-local h,v) | Label | Arrow |
+|---|---|---|
+| dominant −h          | left-beating  | ← |
+| dominant +h          | right-beating | → |
+| dominant −v          | up-beating    | ↑ |
+| dominant +v          | down-beating  | ↓ |
+| mixed h&v, +h −v     | oblique up-right | ↗ |
+| mixed h&v, −h −v     | oblique up-left  | ↖ |
+| mixed h&v, +h +v     | oblique down-right | ↘ |
+| mixed h&v, −h +v     | oblique down-left  | ↙ |
+
+Eye-local coordinate convention: `h` increases from medial to lateral extent, `v` increases from
+upper to lower extent. The user-facing label is the anatomical direction the eye is beating —
+implementations MUST map "image up/down/left/right of the eye-local axes" to the clinical words
+("Left-beating", "Up-beating", etc.) using the standard ophthalmic convention. Bare `L` / `R` /
+`h` / `v` must never appear in the user-facing overlay.
+
+### K.5 Torsion
+
+Iris-circle-centre motion CANNOT detect torsional nystagmus. Torsion requires iris-texture
+rotation tracking inside the iris circle. The detector MUST set
+`torsional_status: not_assessed` and the overlay MUST display "Torsion: not assessed" until a
+rotation signal is implemented (future module). The detector MUST NOT infer torsion from centre
+motion alone.
+
+### K.6 Outputs
+
+Per window:
+`window_start_frame`, `window_end_frame`, `nystagmus_present` (bool), `beating_direction` ∈
+{left, right, up, down, oblique_up_right, oblique_up_left, oblique_down_right, oblique_down_left,
+torsional, none}, `n_beats`, `mean_beat_rate_hz`, `direction_consistency` ∈ [0,1],
+`rhythmicity` ∈ [0,1], `confidence` ∈ [0,1], `rejection_reason` (only when `nystagmus_present:
+false`: insufficient_signal / too_few_beats / direction_inconsistent / not_rhythmic / random).
+
+Per clip (`nystagmus_report.json`):
+`clip_nystagmus_present`, `dominant_beating_direction`, `nystagmus_windows[]`, `analysed_eye`
+(anatomical: "Left" / "Right"), `torsional_status: not_assessed`, detector parameters used.
+
+### K.7 Acceptance bar
+
+- On a steady-gaze clip (clean baseline), the detector reports `nystagmus_present: false`.
+- On each reference nystagmus clip, the detector reports the correct beating direction during the
+  nystagmus segment and stays silent during the steady-gaze segments.
+- On the fistula clip, the detector does not invent nystagmus during pure gaze excursions or head
+  movement.
+- Torsional clips: detector reports `torsional_status: not_assessed`; presence of torsion is
+  invisible to V1 (acceptable — it is explicitly out of scope until rotation tracking is added).
+
+### K.8 Parameters
+
+Seed values (`N_beats`, fast-phase amplitude threshold, rhythmicity tolerance, direction tolerance
+cone, window length, minimum valid-frame fraction) are calibrated — not redesigned — on the
+reference clip set during implementation. They live in a single `NystagmusParams` block and may
+be adjusted per protocol (e.g., positional testing vs spontaneous gaze) without changing the
+detection structure described above.
 
 ---
 

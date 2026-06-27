@@ -1,12 +1,22 @@
 # EyeVNG Tracking Philosophy (Revised)
 
 > **⭐ V1 DESIGN UPDATE (2026-06-27): single-eye, LIMBUS + CONTOUR tracking.** For Version 1 the
-> clinical trace is built from ONE user-selected eye. The moving object is the estimated full iris
-> circle/ellipse fitted from the visible limbus / iris-sclera boundary. The moving reference frame is
-> one manually approved and tracked eye-opening contour, not four independently tracked points.
-> MediaPipe is proposal/fallback/reacquisition/quality only — never the per-frame measurement. The
-> head-motion-compensation section below is retained only for future head-impulse/VOR work where
-> explicitly stated.
+> internal *measurement* is built from ONE user-selected eye. The moving object is the estimated
+> full iris circle/ellipse fitted from the visible limbus / iris-sclera boundary. The moving
+> reference frame is one manually approved and tracked eye-opening contour, not four independently
+> tracked points. MediaPipe is proposal/fallback/reacquisition/quality only — never the per-frame
+> measurement. The head-motion-compensation section below is retained only for future
+> head-impulse/VOR work where explicitly stated.
+
+> **⭐ V1 USER-FACING OUTPUT (2026-06-27): NYSTAGMUS DETECTION.** The V1 clinical *display* is
+> NOT a VNG-style position trace. It is the overlay video answering: *Is nystagmus present?*
+> and *What is the beating direction?* (left / right / up / down / oblique; torsional only when a
+> rotation signal is implemented). The contour-relative iris-centre signal described in this
+> document is the INTERNAL analysis input to that detector — it is the right *measurement* to
+> build, but it is no longer the right *display*. Iris-circle centre motion CAN detect horizontal,
+> vertical, and oblique nystagmus. It CANNOT detect torsion; torsion requires iris-texture
+> rotation tracking inside the iris circle, and until that exists torsion is reported as
+> `not_assessed`.
 
 **Status: SOURCE OF TRUTH for all tracking-related design decisions.** Where any other document
 (`VISION.md`, `SYSTEM_ARCHITECTURE.md`, `IMPLEMENTATION_PLAN.md`,
@@ -202,13 +212,16 @@ legacy ideas, not the V1 reference rule.
 phases share the same high-frequency band, so **no temporal filter can remove one without denting the
 other**. Therefore: preserving the beats always wins (the filter is beat-preserving/near-passthrough);
 reduce noise at the **source** (better iris detection), not by smoothing. The **overlay shows RAW**
-(verification — must sit on the iris, no lag); the **VNG graph uses the filtered** signal (a small
-lag is harmless there). Raw is always kept in the CSV.
+iris circle/centre (verification — must sit on the iris, no lag). For V1, the **filtered
+contour-relative signal is the INTERNAL input to the nystagmus detector** — it is not the V1
+clinical display; the V1 clinical display is the nystagmus arrow + label on the overlay video.
+Raw values are always kept in the CSV (audit trail).
 
-**Reading the trace is a scaling problem too.** Real eye movement can be tracked yet invisible in a
-graph because the y-scale is dominated by head movement or by a long clip. The cures are the
-contour-relative signal (removes local head/camera movement) plus **time-zoom**, and a live **scrolling trace strip
-under the video** (synced cursor) — not more filtering.
+**Detector reading vs reader reading.** Random-looking movements and isolated saccades must not
+be classified as nystagmus by the detector — V1 requires repeated beats, direction consistency,
+and approximate rhythmicity (see `EYEVNG_TRACKING_SPECIFICATION.md` §K). Debug-only position and
+velocity plots may still be saved to the output directory for developer verification, but they
+are not the primary clinical artefact.
 
 ---
 
@@ -307,7 +320,10 @@ boundary.
 Not from repeated iris detection.
 
 The limbus-derived iris circle is the primary measurement target. The eye-opening contour is the
-reference frame for corrected clinical coordinates.
+reference frame for corrected clinical coordinates. The resulting contour-relative iris-centre
+signal is the INTERNAL analysis input to the V1 nystagmus detector — it is not the V1 clinical
+display. The clinical display is the overlay video carrying the nystagmus arrow and label (see
+`PROJECT_VISION_AND_REQUIREMENTS.md` "Nystagmus Detection — V1 PRIMARY OUTPUT").
 
 ---
 
@@ -335,21 +351,29 @@ It is not part of Version 1.
 
 # Success Criterion
 
-The overlay video should convince a vestibular neurologist that:
+The V1 overlay video must satisfy BOTH of the following from a vestibular neurologist's reading:
 
+Tracking layer:
 1. The estimated full iris circle/ellipse remains attached to the visible limbus / iris-sclera
    boundary.
 2. The eye-opening contour remains attached to the visible palpebral fissure.
 3. The tracker follows anatomy rather than repeatedly rediscovering it.
-4. The resulting traces represent real eye movement rather than landmark jitter.
+4. The internal contour-relative iris-centre signal represents real eye movement rather than
+   landmark jitter.
 
-Only after this stage is achieved should EyeVNG move toward:
+Clinical layer (the V1 user-facing output):
+5. When the clip contains repeated rhythmic jerk nystagmus, the overlay displays the correct
+   beating-direction arrow (← → ↑ ↓ ↗ ↖ ↘ ↙) within a few beats of onset.
+6. When the clip contains only random saccades, smooth pursuit, drift, or steady gaze, no arrow
+   is shown.
+7. Torsion is shown as "not assessed" until a torsional/rotation signal is implemented.
 
-* VNG trace generation
-* nystagmus analysis
-* torsional analysis
+Only after both layers are achieved should EyeVNG move toward:
+
+* torsional nystagmus detection (requires iris-texture rotation tracking inside the iris circle)
 * head impulse testing
 * VOR estimation
+* binocular / INO / skew / dysconjugate analysis
 * diagnostic interpretation
 
 ---
