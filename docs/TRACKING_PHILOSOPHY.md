@@ -1,13 +1,12 @@
 # EyeVNG Tracking Philosophy (Revised)
 
-> **⭐ V1 DESIGN UPDATE (2026-06-26): single-eye, EYE-LOCAL tracking.** For Version 1 the clinical
-> trace is built from ONE user-selected eye and its four eye-boundary landmarks (inner/outer canthus,
-> upper/lower margin) + the confirmed iris — **NO face/nose/cheek/tragus/head-pose**. The eye-local
-> coordinate system (horizontal 0=inner→1=outer canthus, vertical 0=upper→1=lower margin) replaces the
-> canthus-midpoint / affine head-correction as the clinical signal. MediaPipe is
-> proposal/fallback/reacquisition/quality only — never the per-frame measurement. Canonical spec:
-> **`VISION.md` → "VERSION 1 DESIGN — Single-Eye, Eye-Local Tracking".** The head-motion-compensation
-> section below (affine, canthus-relative) is retained for the FUTURE head-impulse/VOR module.
+> **⭐ V1 DESIGN UPDATE (2026-06-27): single-eye, LIMBUS + CONTOUR tracking.** For Version 1 the
+> clinical trace is built from ONE user-selected eye. The moving object is the estimated full iris
+> circle/ellipse fitted from the visible limbus / iris-sclera boundary. The moving reference frame is
+> one manually approved and tracked eye-opening contour, not four independently tracked points.
+> MediaPipe is proposal/fallback/reacquisition/quality only — never the per-frame measurement. The
+> head-motion-compensation section below is retained only for future head-impulse/VOR work where
+> explicitly stated.
 
 **Status: SOURCE OF TRUTH for all tracking-related design decisions.** Where any other document
 (`VISION.md`, `SYSTEM_ARCHITECTURE.md`, `IMPLEMENTATION_PLAN.md`,
@@ -43,8 +42,8 @@ Its role is:
 
 * locate the face
 * locate the eyes
-* propose iris landmarks
-* propose facial landmarks
+* optionally propose the selected eye-opening contour
+* optionally propose the iris/limbus boundary
 
 MediaPipe should NOT be considered the final source of measurements on every frame.
 
@@ -77,28 +76,25 @@ The user becomes the final authority regarding landmark identity.
 
 ---
 
-# Facial Landmark Confirmation
+# Eye-Opening Contour Confirmation
 
-The software should propose facial landmarks.
+For V1, the reference frame is the visible eye-opening contour: the palpebral fissure / eyelid
+opening outline.
+
+The software may propose this contour, or load it from `approved_landmarks.json`.
 
 The user should confirm or correct:
 
-* bridge of nose midpoint
-* nose tip
-* left cheek point
-* right cheek point
-* left ear or tragus if visible
-* right ear or tragus if visible
-* left inner canthus
-* left outer canthus
-* right inner canthus
-* right outer canthus
+* the selected eye-opening contour
+* the visible medial extent of the contour
+* the visible lateral extent of the contour
+* the visible upper and lower contour boundaries
 
-If a landmark is not visible:
+The medial, lateral, upper, and lower reference values are derived from this contour geometry. They
+are not isolated points tracked independently.
 
-mark as unavailable.
-
-After confirmation these landmarks become tracking targets.
+If the contour cannot be confidently tracked later, the raw iris trace may remain usable, but the
+contour-relative clinical trace must be marked `reference_uncertain`.
 
 ---
 
@@ -110,9 +106,9 @@ The software may propose an iris location.
 
 The user should:
 
-* move the iris centre
-* resize the iris circle
-* confirm the iris boundary
+* confirm the visible limbus / iris-sclera boundary
+* review the estimated full iris circle/ellipse inferred from the visible boundary
+* correct the centre/radius/axes only as a way of fitting the iris boundary, not as a pupil marker
 
 The confirmed circle should cover the visible iris, out to the limbus.
 
@@ -120,8 +116,10 @@ The circle represents the iris boundary, not the smaller pupil.
 
 Store:
 
-* iris centre
-* iris radius
+* limbus / iris-boundary representation
+* estimated full iris circle/ellipse
+* iris-circle centre
+* iris radius or axes
 
 for each eye.
 
@@ -134,9 +132,9 @@ continue with one-eye tracking.
 # Landmark Review and Approval
 
 **Core principle: human-confirmed anatomy is the source of truth.** AI landmark detection (MediaPipe)
-is only a *proposal*. **Tracking must not begin until the user explicitly approves the proposed facial
-landmarks and iris circles.** This is a permanent project requirement, not a temporary implementation
-detail.
+is only a *proposal*. **Tracking must not begin until the user explicitly approves the selected eye's
+eye-opening contour and iris/limbus boundary.** This is a permanent project requirement, not a
+temporary implementation detail.
 
 **Why confirmed anatomy is preferred over repeated detection:** per-frame detection jitters and can
 silently mislabel or drift between structures, creating artificial movement. A human confirming the
@@ -146,42 +144,44 @@ or occlusion) — never as the per-frame source of truth.
 
 Workflow:
 
-1. **Landmark proposal** — MediaPipe proposes the facial landmarks and iris circles on the best
-   initial frame.
-2. **Landmark editing** — the user may move, resize (iris radius), add, or delete landmarks, and
+1. **Anatomy proposal** — the software may propose the eye-opening contour and iris/limbus boundary
+   on the best initial frame.
+2. **Anatomy editing** — the user may correct the contour, resize/refit the iris circle/ellipse, and
    mark any not visible as unavailable.
 3. **Landmark approval** — the user explicitly approves the set. Nothing is tracked before this.
-4. **Approved landmarks become tracking targets** — persisted to `approved_landmarks.json` and used
-   as the initial reference by every tracking module.
+4. **Approved anatomy becomes tracking targets** — persisted to `approved_landmarks.json` and used as
+   the initial reference by every tracking module.
 5. **MediaPipe becomes fallback only** — consulted afterwards solely for re-acquisition.
 
 **Stage 0 is an INTERACTIVE confirmation screen, not silent auto-detection.** Running `--approve`
-must: open the chosen frame; visibly **mark and label** every proposed point (left iris, right iris,
-nose bridge / central nasal reference, left cheek, right cheek, and any other stable facial reference
-in use); ask the user to confirm each; let the user **click the correct location** for any wrong
-point; save the corrected set to `approved_landmarks.json`; and **NOT proceed to tracking** (approval
-only saves). The clinician must never have to trust automatic detection blindly.
+must: open the chosen frame; visibly **mark and label** the selected eye's eye-opening contour,
+visible limbus arc, estimated full iris circle/ellipse, and iris-circle centre; ask the user to
+confirm or correct them; save the corrected set to `approved_landmarks.json`; and **NOT proceed to
+tracking** (approval only saves). The clinician must never have to trust automatic detection blindly.
 
 ---
 
-# Iriss and Face Are Independent — Head-Motion Compensation
+# Iris and Eye-Opening Contour Are Independent
 
-**Facial landmarks move with the head. Iriss move within the eyes.** They are two separate coordinate
-systems and must be tracked separately.
+**The iris circle is the moving object. The eye-opening contour is the moving reference frame.** They
+are two separate anatomical objects and must be tracked separately.
 
-- The face tracker may define a **moving head/face reference frame** per frame, and may move the eye
-  **search ROI** — but it must **never move, drag, shift, overwrite, or infer the iris result.**
-- The iris centre must always be found from **image evidence inside the eye region**. If it cannot be
-  found confidently, mark it `lost`/`blink_or_occluded`/`reacquired` — **never** invent it from face
-  movement.
-- Output **both**: (a) **raw** iris coordinates in image space, and (b) **head-corrected** eye
-  position relative to the tracked facial reference frame.
-- Correct logic: track face landmarks → estimate head reference-frame motion; track iris → estimate
-  iris centres from image evidence; compute eye position **relative to** the moving face frame. The
-  face tracker decides the search box, never the iris location.
+- The limbus / iris-boundary tracker estimates the visible limbus arc, the full iris circle/ellipse,
+  and the iris-circle centre from image evidence. This is the primary clinical tracker.
+- The eye-opening contour tracker follows the approved palpebral fissure contour as one shape. It
+  defines the reference frame used to express the iris-circle centre in eye-local coordinates.
+- CFT/internal iris features may assist prediction, stabilization, weak-fit support, or consistency
+  checking, but the CFT centre is not the primary clinical centre.
+- MediaPipe may propose or reacquire anatomy, but it is optional and not required when approved
+  landmarks already exist.
+- Pupil tracking, pupil darkness, and pupil-centre terminology are not part of V1.
+- Output **both**: (a) raw iris-circle centre in image space, and (b) contour-relative eye position.
+  If the iris is good but the contour is uncertain, keep the raw iris trace and mark the corrected
+  relative trace `reference_uncertain`.
 
 **Permanent audit rule:** no face-transform / landmark shift / affine / face-template motion may be
-applied directly to iris x/y. Keep `raw_*_iris_center_x/y` and `corrected_eye_h/v` as separate outputs.
+applied directly to iris x/y. Keep raw iris-circle centre and contour-relative clinical coordinates as
+separate outputs.
 
 **Drift fix (2026-06-25):** the earlier iris tracker searched a template around the *previous iris
 position*; during head movement the iris left the window and the template locked onto a wrong dark
@@ -192,14 +192,11 @@ and any match outside the iris is rejected — so the marker physically cannot l
 positions the search box only; it is not forced to be the iris result. Verified: off-iris gap
 493px → ~10px median; the frame that used to drift onto the jaw now keeps the marker on the eye.
 
-**Eye-in-head — preferred method: CANTHUS-RELATIVE (2026-06-25).** The head reference is each eye's
-own **medial (inner) and lateral (outer) canthus**: origin = the canthi midpoint, horizontal axis =
-inner→outer (forced rightward so the two eyes read conjugately); the iris's displacement along that
-axis is the eye-in-head horizontal position (perpendicular = vertical). Because the canthi move WITH
-the head, this **cancels head/"hair" movement locally**, needs only two points per eye, leaves **no
-gaps** (canthi are present every frame), and reads conjugately. This is the `corrected_*_eye_h/v`
-signal. A whole-face affine transform was tried first but is limited by facial-landmark quality under
-3D head rotation (gaps + spikes) — kept only as a fallback. Pair each iris with its NEAREST canthi.
+**Eye-in-head — V1 method: CONTOUR-RELATIVE (2026-06-27).** The reference is the tracked
+eye-opening contour. The medial/lateral/upper/lower reference values are derived from the contour's
+geometry each frame. The iris-circle centre's displacement within those contour-derived limits is the
+`corrected_*_eye_h/v` signal. A whole-face affine transform and isolated canthus points are future or
+legacy ideas, not the V1 reference rule.
 
 **Shimmer vs nystagmus (key principle, 2026-06-25).** Measurement-noise "shimmer" and nystagmus fast
 phases share the same high-frequency band, so **no temporal filter can remove one without denting the
@@ -210,7 +207,7 @@ lag is harmless there). Raw is always kept in the CSV.
 
 **Reading the trace is a scaling problem too.** Real eye movement can be tracked yet invisible in a
 graph because the y-scale is dominated by head movement or by a long clip. The cures are the
-canthus-relative signal (removes head movement) plus **time-zoom**, and a live **scrolling trace strip
+contour-relative signal (removes local head/camera movement) plus **time-zoom**, and a live **scrolling trace strip
 under the video** (synced cursor) — not more filtering.
 
 ---
@@ -223,8 +220,8 @@ Track the same anatomical structures continuously.
 
 Track:
 
-* confirmed facial landmarks
-* confirmed iris circles
+* the confirmed eye-opening contour as one shape
+* the confirmed limbus / iris-boundary model and estimated full iris circle/ellipse
 
 Do not redetect these structures independently on every frame.
 
@@ -304,11 +301,13 @@ For Version 1:
 
 Eye position should be derived from:
 
-confirmed and tracked iris centres.
+the centre of the estimated iris circle/ellipse fitted from the visible limbus / iris-sclera
+boundary.
 
 Not from repeated iris detection.
 
-The iris is the primary measurement target.
+The limbus-derived iris circle is the primary measurement target. The eye-opening contour is the
+reference frame for corrected clinical coordinates.
 
 ---
 
@@ -338,8 +337,9 @@ It is not part of Version 1.
 
 The overlay video should convince a vestibular neurologist that:
 
-1. The iris marker remains attached to the iris.
-2. Facial landmarks remain attached to the same anatomical structures.
+1. The estimated full iris circle/ellipse remains attached to the visible limbus / iris-sclera
+   boundary.
+2. The eye-opening contour remains attached to the visible palpebral fissure.
 3. The tracker follows anatomy rather than repeatedly rediscovering it.
 4. The resulting traces represent real eye movement rather than landmark jitter.
 
@@ -376,15 +376,13 @@ anatomy.
   radius to the iris boundary (limbus); `iris_contrast()` reports the iris/sclera contrast (low ⇒
   flagged, e.g. a washed-out or low-contrast iris). (Earlier drafts found the dark *pupil* concentric
   inside the iris; V1 marks the iris boundary directly.)
-- ✅ Anatomical-confirmation proposal: `iris_tracker.py --propose` marks the iris (green) + all facial
-  landmarks (nose bridge/tip, cheeks, tragus, four canthi; amber) on the init frame →
-  `init_proposal.png`, with off-frame landmarks reported unavailable.
+- ✅ Anatomical-confirmation proposal: Stage 0 must mark the selected eye's iris/limbus boundary and
+  eye-opening contour. Any older facial-landmark proposal output is legacy support and must not define
+  the V1 clinical reference.
 - ✅ **Stage 0 approval gate:** `--approve` (review/correct → APPROVE) writes `approved_landmarks.json`;
-  tracking refuses to start without it and builds the tracker from the approved init frame + iris.
-- ✅ **Facial landmarks are now TRACKED:** `FaceLandmarkTracker` follows each approved facial landmark
-  as a persistent template point (local search + MediaPipe backup), with status/confidence, drawn on
-  the overlay (coloured by status) and exported to `face_landmarks.csv`. High-texture points
-  (nose bridge/tip, tragus) track rock-solid; low-texture points (cheek, inner canthus) read
-  "uncertain" more often — honestly flagged.
-- ⬜ **Interactive editing of facial landmarks** (move/add/delete in the approval GUI) is still pending
-  — approval currently edits iris circles only.
+  tracking refuses to start without it and builds the tracker from the approved init frame anatomy.
+- ⬜ **Eye-opening contour tracking:** implementation must replace the old four-independent-point
+  reference with a single tracked contour and derive medial/lateral/upper/lower values from that
+  contour.
+- ⬜ **Legacy facial landmark tracking:** may remain for future modules or compatibility, but it is not
+  the V1 clinical reference frame.

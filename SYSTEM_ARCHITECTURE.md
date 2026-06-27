@@ -1,17 +1,17 @@
 # EyeVNG Version 1 Architecture
 
-> **⭐ V1 DESIGN UPDATE (2026-06-26): single-eye, EYE-LOCAL tracking.** The clinical trace uses only
-> ONE user-selected eye and its four eye-boundary landmarks (inner/outer canthus, upper/lower margin)
-> + the confirmed iris — **NO face/nose/cheek/tragus/head-pose**. MediaPipe is
-> proposal/fallback/reacquisition/quality only, never the per-frame signal. Canonical spec:
-> **`VISION.md` → "VERSION 1 DESIGN — Single-Eye, Eye-Local Tracking".** Any face/head-landmark
+> **⭐ V1 DESIGN UPDATE (2026-06-27): single-eye, LIMBUS + CONTOUR tracking.** The clinical trace uses
+> ONE user-selected eye. The moving object is the estimated full iris circle/ellipse fitted from the
+> visible limbus / iris-sclera boundary. The moving reference frame is one manually approved and
+> tracked eye-opening contour, not four independently tracked points. MediaPipe is
+> proposal/fallback/reacquisition/quality only, never the per-frame signal. Any face/head-landmark
 > correction described below is deferred to a future (binocular / head-impulse / VOR) version.
 
 > **Tracking design → see `docs/TRACKING_PHILOSOPHY.md`** — the source of truth for all
 > tracking-related design decisions. The measurement/tracking sections below defer to it.
 
 ## 1. Goal
-EyeVNG is a measurement-first video analysis platform for vestibular eye movement work. Version 1 focuses on reliable extraction of eye and head movement traces from uploaded smartphone videos without any diagnostic or classification logic.
+EyeVNG is a measurement-first video analysis platform for vestibular eye movement work. Version 1 focuses on reliable extraction of a single-eye iris movement trace from uploaded smartphone videos without any diagnostic or classification logic. Head movement traces are future modules.
 
 ## 2. Design Principles
 - Measurement first, diagnosis later.
@@ -69,13 +69,17 @@ EyeVNG/
 ## Stage 0 – Landmark Initialization (before any tracking)
 
 Human-confirmed anatomy is the source of truth; tracking must not begin until the user approves the
-landmarks (see `docs/TRACKING_PHILOSOPHY.md`). Components:
+selected eye's eye-opening contour and iris/limbus boundary (see `docs/TRACKING_PHILOSOPHY.md`).
+Components:
 
-- **MediaPipe proposal engine** — proposes facial landmarks + iris circles on the best init frame.
-- **Landmark review interface** — the user moves / adds / deletes facial landmarks and moves / resizes
-  iris circles; marks unavailable landmarks.
-- **Landmark approval interface** — the user explicitly approves the set; nothing tracks before this.
-- **Landmark storage module** — persists the approved set.
+- **Optional proposal engine** — may propose the eye-opening contour and iris/limbus boundary on the
+  best init frame. MediaPipe may help when available but is not required when approved landmarks
+  already exist.
+- **Anatomy review interface** — the user corrects the eye-opening contour and iris/limbus
+  circle/ellipse; marks unavailable anatomy if needed.
+- **Approval interface** — the user explicitly approves the contour and iris boundary; nothing tracks
+  before this.
+- **Anatomy storage module** — persists the approved set.
 
 **Output: `approved_landmarks.json`.** All subsequent tracking modules MUST start from
 `approved_landmarks.json` as the initial reference. MediaPipe is fallback only thereafter.
@@ -85,12 +89,11 @@ landmarks (see `docs/TRACKING_PHILOSOPHY.md`). Components:
 ```text
 Upload MP4
   -> Ingestion and validation
-  -> STAGE 0: landmark proposal (MediaPipe, best frame)
-       -> user review / correction (move, add, delete, resize)
+  -> STAGE 0: anatomy proposal/review (optional MediaPipe, best frame)
+       -> user review / correction (eye-opening contour + iris/limbus boundary)
        -> user APPROVAL  ->  save approved_landmarks.json
-  -> Continuous TRACKING from approved_landmarks.json (local search, prior position/size)
+  -> Continuous TRACKING from approved_landmarks.json (limbus tracker + contour tracker)
   -> MediaPipe reacquisition only on failure / blink / occlusion
-  -> Head pose estimation
   -> Raw measurement capture
   -> Quality assessment
   -> ROI export per frame
@@ -107,12 +110,17 @@ Upload MP4
 - Preserve the original video file.
 
 ### Measurement (see `docs/TRACKING_PHILOSOPHY.md` — detect once → confirm → track)
-- Propose landmarks once with MediaPipe; the user confirms the anatomy (facial landmarks + iris
-  circles). Confirmed structures become tracking targets.
-- Process every frame, but **track** the confirmed structures (local search from the previous
-  position/size) rather than re-detecting them independently each frame.
-- MediaPipe is a backup: reacquisition after tracking failure, blink, or occlusion only.
-- Estimate head pose axes.
+- Propose or load anatomy once; the user confirms the selected eye's eye-opening contour and
+  iris/limbus boundary. Confirmed structures become tracking targets.
+- Track the limbus / iris-sclera boundary as the primary clinical object and estimate the full iris
+  circle/ellipse from the visible arc.
+- Emit the limbus-derived iris-circle centre as the clinical centre.
+- Track the eye-opening contour as one reference-frame shape. Derive medial/lateral/upper/lower
+  values from contour geometry; do not track those as four independent points.
+- Use CFT/internal iris features only as optional helpers for prediction, stabilization, weak-fit
+  support, or consistency checking.
+- MediaPipe is a backup: initialization/reacquisition after tracking failure, blink, or occlusion
+  only, and must remain optional.
 - Store raw measurements for every frame; never invent positions (blank during blink/occlusion).
 
 ### Quality
@@ -126,7 +134,8 @@ Upload MP4
 - Write overlay video with all requested visual verification elements.
 
 ### Visualization
-- Render facial landmarks, eye landmarks, iris centres, head pose axes, and frame number.
+- Render the eye-opening contour, contour-derived limits, visible limbus arc, estimated full iris
+  circle/ellipse, limbus-derived iris-circle centre, state, confidence, and frame number.
 - Make the overlay video suitable for manual verification.
 
 ### Calibration
@@ -144,10 +153,12 @@ Upload MP4
 
 ## 8. Overlay Video Requirements
 The overlay video will show:
-- iris centres
-- eye landmarks
-- face landmarks
-- head pose axes
+- tracked eye-opening contour
+- contour-derived medial/lateral/upper/lower limits
+- visible limbus arc
+- estimated full iris circle/ellipse
+- limbus-derived iris-circle centre
+- state and confidence
 - frame number
 
 This makes visual verification straightforward for clinicians and developers.

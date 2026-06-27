@@ -13,42 +13,54 @@
 > (development journal) → `docs/DEVELOPMENT_NOTES.md`.** This file holds the overall vision,
 > requirements, and build order.
 
-## ⭐ VERSION 1 DESIGN — Single-Eye, IRIS Tracking (DEFINITIVE, Dr. Kothari 2026-06-26)
+## ⭐ VERSION 1 DESIGN — Single-Eye, Limbus/Iris-Circle Tracking (DEFINITIVE, Dr. Kothari 2026-06-27)
 
 **Motto: "Detect once. Track forever."** Detection is only initialisation; tracking is the
-measurement. The clinical signal is continuous IRIS tracking within the eye opening.
+measurement. The clinical signal is continuous tracking of the estimated iris circle/ellipse within
+the tracked eye-opening contour.
 
 **Clinical principle.** We measure movement of the eyeball. The iris is rigidly attached to the
-eyeball, so tracking the iris is sufficient for horizontal/vertical eye movement. **We do NOT track
-the pupil** (the small pupil marker jitters; the iris has a strong, high-contrast boundary
-against the sclera and is larger and steadier). The iris centre is the eye-position measurement point.
+eyeball, so tracking the limbus / iris-sclera boundary is sufficient for horizontal/vertical eye
+movement. EyeVNG V1 fits or estimates the full iris circle/ellipse from the visible limbus arc, and
+the centre of that estimated circle/ellipse is the clinical iris centre. **We do NOT track the pupil,
+detect pupil darkness, or use pupil centre as the clinical point.**
 
 **1. Single eye.** V1 tracks ONE user-selected eye (left or right). The other eye may be detected by
 MediaPipe in the background but MUST NOT contribute to, average into, or alter the clinical trace.
 Binocular (INO, skew, disconjugate gaze) is a future version.
 
-**2. Initialisation — the clinician marks exactly FIVE structures for the selected eye** (and nothing
-else: no pupil, no face/nose/tragus/cheek/head-pose). Tracking must not begin until approved; these
-become the permanent anatomical reference for the recording:
-1. Medial (inner) canthus
-2. Lateral (outer) canthus
-3. Upper eye margin
-4. Lower eye margin
-5. **Iris boundary** (a circle/ellipse covering the whole visible iris)
+**2. Initialisation — the clinician approves TWO anatomical objects for the selected eye** (and
+nothing else for V1: no pupil, no face/nose/tragus/cheek/head-pose). Tracking must not begin until
+approved; these become the permanent anatomical reference for the recording:
+1. **Eye-opening contour** — one manually approved contour around the visible palpebral fissure /
+   eyelid opening outline.
+2. **Iris/limbus boundary** — a visible iris-sclera boundary arc plus estimated full iris
+   circle/ellipse covering the whole iris.
 
-**3. Eye-local coordinate system (the clinical trace).** Defined ONLY by the four eye-boundary
-landmarks; the measured point is the **iris centre**:
-- Horizontal: iris centre on the medial→lateral canthus axis — **0 = inner canthus, 1 = outer canthus**.
-- Vertical: iris centre on the upper→lower margin axis — **0 = upper margin, 1 = lower margin**.
-Movement is WITHIN the eye opening, never within the face or frame. The four boundary landmarks move
-with the eye, so head/camera translation cancels — no face model or head pose at this stage.
+The medial canthus region, lateral canthus region, upper boundary, and lower boundary are derived
+from the tracked eye-opening contour geometry. They are not four independently tracked point
+landmarks.
 
-**4. Tracking = follow the marked iris as a single physical object.** After init, track the SAME iris
-continuously: each frame starts from the **previous** iris position and searches **locally**. Never
-re-detect the iris globally every frame. **MediaPipe is NOT the tracker** — it is used ONLY for
-(a) initial eye localisation, (b) recovery after complete tracking loss, (c) recovery after a
-prolonged blink/occlusion, (d) optional quality checking. MediaPipe must never adjust the iris
-position during normal tracking; the clinical trace must not depend on it frame-to-frame.
+**3. Eye-local coordinate system (the clinical trace).** Defined by the tracked eye-opening contour;
+the measured point is the **limbus-derived iris-circle centre**:
+- Horizontal: iris-circle centre relative to the contour-derived medial and lateral extents.
+- Vertical: iris-circle centre relative to the contour-derived upper and lower extents.
+Movement is WITHIN the eye opening, never within the face or frame. The eye-opening contour moves
+with the eye region, so head/camera translation is handled locally without a face model or head pose
+at this stage.
+
+**4. Tracking hierarchy.**
+1. Limbus / iris-boundary tracker = primary clinical tracker.
+2. Eye-opening contour tracker = reference-frame tracker.
+3. CFT/internal iris features = optional helper only for motion prediction, search stabilization,
+   weak-fit support, and consistency checking.
+4. MediaPipe = optional helper for initialization/recovery only, not required.
+5. Pupil tracking = not part of V1.
+
+After init, track the SAME iris boundary and SAME eye-opening contour continuously. Each frame starts
+from the previous state and searches locally. Never re-detect the iris globally every frame.
+**MediaPipe is NOT the tracker** — it is used ONLY for initial proposal/recovery/optional quality
+checking and must never adjust the clinical trace during normal tracking.
 
 **5. Eye selection / failure.** The user chooses the eye explicitly (`--eye left|right`). **No
 automatic eye switching** — if the selected eye fails, ASK before switching.
@@ -58,22 +70,26 @@ allowed to look like a fast phase). After a blink, resume from the tracked iris;
 if tracking has truly failed.
 
 **7. Drift guards (a high template score is NOT proof of attachment).** A frame's iris position is
-trusted ONLY if it is anatomically plausible. Reject / mark `drift_suspected` (not valid eye movement)
-when: the iris centre leaves the marked aperture box; the iris radius/size changes substantially;
-frame-to-frame motion is physiologically implausible; or a large excursion can't be visually verified.
-**The trace is valid only if the overlay proves the iris marker stays anatomically attached.**
+trusted ONLY if the estimated full iris circle/ellipse remains anatomically attached to the visible
+limbus / iris-sclera boundary. Reject / mark `drift_suspected` (not valid eye movement) when the
+limbus cannot be fit, visible arc coverage is poor, the circle/ellipse fit is inconsistent with the
+visible boundary, temporal continuity fails, or a large excursion cannot be visually verified.
+Aperture/contour extent checks are coarse diagnostics, not the dominant validity gate.
+**The trace is valid only if the overlay proves the iris circle/ellipse stays anatomically attached.**
 
 **8. Version-1 clinical outputs.**
-1. Eye-local horizontal iris-centre position vs time
-2. Eye-local vertical iris-centre position vs time
-3. Overlay: selected eye, the four eye-boundary landmarks, the **tracked iris boundary**, iris centre, status
+1. Eye-local horizontal iris-circle-centre position vs time
+2. Eye-local vertical iris-circle-centre position vs time
+3. Overlay: selected eye, visible eye-opening contour, visible limbus arc, estimated full iris
+   circle/ellipse, iris-circle centre, state, confidence
 4. Raw CSV (per frame): `frame_number, timestamp_ms, time_sec, selected_eye, iris_center_x_raw,
    iris_center_y_raw, iris_radius_or_axes, eye_local_horizontal, eye_local_vertical,
    iris_tracking_status, iris_tracking_confidence, blink_or_occlusion_status, artifact_type`
 5. Tracking quality report (incl. blink statistics)
 
-**Success criterion:** the overlay shows a marker that stays attached to the iris throughout, and the
-eye-local trace matches what an experienced vestibular clinician sees on the video.
+**Success criterion:** the overlay shows the estimated iris circle/ellipse attached to the visible
+limbus throughout, and the contour-relative eye-local trace matches what an experienced vestibular
+clinician sees on the video.
 
 **Future modules** (only after V1 is stable): V2 head tracking / head-impulse / VOR; V3 binocular /
 disconjugate / INO / skew; V4 torsional (iris-texture rotation, using the already-tracked iris).
@@ -93,8 +109,9 @@ How the eye-movement trace is shown on/with the video. These are firm requiremen
 4. **The trace must NEVER cover the eyes.** Because the source clips zoom/pan over the eyes, any
    on-video overlay eventually lands on them. RESOLUTION: render the trace in a **dedicated strip BELOW
    the video** (extend the canvas downward; video pixels untouched, eyes always fully visible).
-5. **Signal shown = canthus-relative ("eye-in-socket")** — iris measured against that eye's own
-   inner+outer canthus (cancels head/"hair" movement). This is the `corrected_*` output.
+5. **Signal shown = contour-relative ("eye-in-socket")** — iris-circle centre measured against that
+   eye's own tracked eye-opening contour. The contour-derived medial/lateral/upper/lower extents
+   define the corrected coordinate system.
 
 Implemented in `iris_tracker.py` (`superimpose_traces`, `run`) + `app.py` (`--eye`). Uncommitted.
 
@@ -186,7 +203,8 @@ MediaPipe should locate:
 
 * face
 * eyes
-* iris
+* optional eye-opening contour proposals
+* optional iris/limbus boundary proposals
 
 But should not determine eye position independently in every frame.
 
@@ -259,8 +277,8 @@ If one eye is unusable:
 # Landmark Review and Approval Workflow
 
 Human-confirmed anatomy is the source of truth; AI landmark detection is only a proposal. **Tracking
-must not begin until the user approves the proposed facial landmarks and iris circles.** (Core
-project requirement — see `docs/TRACKING_PHILOSOPHY.md`.)
+must not begin until the user approves the selected eye's eye-opening contour and iris/limbus
+boundary.** (Core project requirement — see `docs/TRACKING_PHILOSOPHY.md`.)
 
 Workflow:
 
@@ -282,42 +300,44 @@ Tracking Begins
 
 Requirements:
 
-* facial landmarks can be moved
-* facial landmarks can be deleted
-* facial landmarks can be added
-* iris circles can be moved
-* iris circles can be resized
+* the eye-opening contour can be corrected
+* contour points can be moved, added, or removed as needed to outline the visible palpebral fissure
+* the iris/limbus boundary can be moved or resized
+* the estimated full iris circle/ellipse can be reviewed against the visible limbus arc
 * tracking starts only after approval
 
-Approved landmarks are saved to `approved_landmarks.json` and become the initial reference for all
+Approved anatomy is saved to `approved_landmarks.json` and becomes the initial reference for all
 tracking modules.
 
 **Stage 0 must be an INTERACTIVE confirmation screen (not silent auto-detection).** `--approve` opens
-the frame, marks + labels each proposed point (left iris, right iris, nose bridge / central nasal
-reference, left/right cheek, and any other stable reference), asks the clinician to confirm each,
-lets the clinician click the correct location for any wrong point, saves to `approved_landmarks.json`,
-and does **not** start tracking. Plain `python app.py --video X` then refuses to run without
-`approved_landmarks.json`, loads it, and tracks from the approved points (no per-frame re-detection;
-reacquisition only on lost confidence).
+the frame, marks and labels the selected eye's proposed eye-opening contour and iris/limbus boundary,
+asks the clinician to confirm or correct them, saves to `approved_landmarks.json`, and does **not**
+start tracking. Plain `python app.py --video X` then refuses to run without `approved_landmarks.json`,
+loads it, and tracks from the approved anatomy (no per-frame re-detection; reacquisition only on lost
+confidence).
 
-**Stage 0 controls (LOCKED):** the **mouse is used only to drag a point** to move it (iris and
-facial landmarks). The **iris radius is changed only with the `+` / `-` keys**. No edge-drag or
-mouse-wheel resize. (`d` toggles a point off/on; Enter approves; q cancels.)
+**Stage 0 controls (LOCKED conceptually):** editing tools must support correcting the eye-opening
+contour and iris/limbus boundary. Existing point/radius controls may be preserved for compatibility,
+but V1 architecture treats medial/lateral/upper/lower reference values as contour-derived geometry,
+not independently tracked landmarks.
 
-# Head-Motion Compensation Requirements
+# Eye-Local Reference Requirements
 
-Facial landmarks move with the head; iris move within the eyes — track both, but the facial
-landmarks are used **only** to correct for head movement, never to decide the iris location.
+The iris circle is the moving object. The eye-opening contour is the moving reference frame.
 
-* Track the approved facial landmarks frame-to-frame; they define the head/face reference frame.
-* Track iris independently from the eye image; the face tracker may move the eye **search box** but
-  must **never** move/overwrite the iris result. If the iris can't be found → lost/blink/reacquire,
-  never invented from face motion.
-* CSV must separate: `raw_left_iris_center_x/y`, `raw_right_iris_center_x/y`, tracked `face_landmark_x/y`,
-  head reference-frame / face transform (if implemented), `corrected_eye_h`, `corrected_eye_v`,
-  `tracking_confidence`, blink/lost/reacquired flags.
-* Overlay may show: raw tracked iris, tracked facial landmarks, the head-reference frame, and the
-  corrected gaze trace.
+* Track the approved eye-opening contour frame-to-frame as one anatomical shape.
+* Derive the medial limit, lateral limit, upper limit, and lower limit from the tracked contour
+  geometry each frame.
+* Track the iris/limbus boundary independently from image evidence; estimate the full iris
+  circle/ellipse from the visible limbus arc.
+* The clinical point is the limbus-derived iris-circle centre, never a pupil centre and never the CFT
+  centre by itself.
+* CSV must separate raw iris-circle centre, contour-derived eye-local coordinates, reference status
+  such as `reference_uncertain`, tracking confidence, blink/lost/reacquired flags, and drift reasons.
+* If iris tracking is good but the contour reference is weak, the raw iris trace may remain valid,
+  but the corrected relative clinical trace must be marked `reference_uncertain`.
+* Overlay may show the raw iris-circle centre, visible limbus arc, estimated full iris circle/ellipse,
+  tracked eye-opening contour, contour-derived reference limits, state, and confidence.
 
 ---
 
@@ -400,11 +420,11 @@ Confidence should be visible on overlay and exported.
 
 Overlay must display:
 
-* face landmarks
-* eye landmarks
-* iris centres
-* tracked iris circle
-* iris centre
+* tracked eye-opening contour
+* contour-derived medial/lateral/upper/lower limits
+* visible limbus arc
+* estimated full iris circle/ellipse
+* limbus-derived iris-circle centre
 * tracking status
 * tracking confidence
 * frame number
