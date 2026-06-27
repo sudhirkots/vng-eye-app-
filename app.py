@@ -26,6 +26,14 @@ def main():
     ap.add_argument("--eye", choices=["auto", "left", "right", "both"], default="auto",
                     help="which eye's trace to display (default auto=single best-tracked eye; "
                          "'both' only when the eyes differ, e.g. INO)")
+    ap.add_argument("--engine", choices=["v1", "composite", "template"], default="v1",
+                    help="tracking engine: v1 (limbus+contour orchestrator, default), "
+                         "composite (CFT only), template (legacy)")
+    ap.add_argument("--no-mediapipe", action="store_true",
+                    help="run from approved landmarks without MediaPipe proposal/recovery")
+    ap.add_argument("--cft-helper", action="store_true",
+                    help="(v1 engine) enable the CFT as a motion-prediction helper "
+                         "(does not change the clinical centre or validity)")
     args = ap.parse_args()
     if args.propose:
         propose_init(args.video, args.output_dir)
@@ -35,7 +43,8 @@ def main():
         review(args.video, args.output_dir)
     else:
         run(args.video, args.output_dir, filter_mode=args.filter, show_raw=args.show_raw_trace,
-            eye=args.eye)
+            eye=args.eye, engine=args.engine, no_mediapipe=args.no_mediapipe,
+            cft_helper=args.cft_helper)
 
 
 if __name__ == "__main__":

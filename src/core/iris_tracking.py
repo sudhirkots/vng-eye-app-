@@ -18,10 +18,17 @@ from dataclasses import dataclass
 from typing import Callable, Optional, Tuple
 
 import cv2
-import mediapipe as mp
 import numpy as np
 
 from src.core.tracking import _eye_confidence, LEFT_EYE_RING, RIGHT_EYE_RING
+
+# The V1 engine (EYEVNG_TRACKING_SPECIFICATION.md) — the weighted multi-feature composite iris
+# tracker. Re-exported here so it "lives in src/core/iris_tracking.py" per MULTIFEATURE_TRACKER_DESIGN
+# §7, while the implementation sits in composite_tracker.py. This replaces the single-template
+# IrisTracker (below, retained only for reference) as the per-frame clinical engine.
+from src.core.composite_tracker import (  # noqa: F401  (re-export)
+    CompositeFeatureTracker, FrameMeasurement, Composite, IrisFeature,
+    PROBATION, TRUSTED, SUSPECT, LOST, VALID_STATES, project_eye_local)
 
 LEFT_IRIS = [468, 469, 470, 471, 472]
 RIGHT_IRIS = [473, 474, 475, 476, 477]
@@ -81,6 +88,13 @@ class IrisDetector:
     """MediaPipe iris detector (ring-mean). Used for init and as the tracking backup."""
 
     def __init__(self):
+        try:
+            import mediapipe as mp
+        except ImportError as exc:
+            raise RuntimeError("MediaPipe is not installed. Use --no-mediapipe with approved landmarks.") from exc
+        if not hasattr(mp, "solutions") or not hasattr(mp.solutions, "face_mesh"):
+            raise RuntimeError("This MediaPipe runtime does not expose solutions.face_mesh. "
+                               "Use --no-mediapipe with approved landmarks.")
         self.fm = mp.solutions.face_mesh.FaceMesh(
             static_image_mode=False, max_num_faces=1, refine_landmarks=True,
             min_detection_confidence=0.5, min_tracking_confidence=0.5)
