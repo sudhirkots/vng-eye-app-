@@ -1,5 +1,71 @@
 # VNG-EYE app — session handoff
 
+> **SESSION 2026-06-27 (ARCHITECTURE CHANGE — iris DISC as the primary object + segment analysis):**
+> Dr. K, watching the overlay: tracking internal feature dots is NOT enough. **V1 must track the WHOLE
+> IRIS as a disc** — fit a circle/ellipse to the iris–sclera boundary (limbus) and follow THAT; the
+> composite features are a stability aid only, not the visible output. "The iris is a circle; if a lid
+> covers part of it, complete the circle from the visible arc. Forget the pupil." **He APPROVED this
+> redesign** (so it is within the development rule, not a silent deviation).
+> - **NEW `src/core/limbus.py`** — fits the iris boundary by radial dark-iris→bright-**sclera** edge
+>   search + RANSAC circle (and an ellipse). Rejects lid/lash/skin edges three ways: skip the
+>   lid-covered TOP wedge (keep sides+bottom — the bottom anchors the centre), require sustained
+>   brightening, and require the bright side to be **whitish sclera, not reddish lid-skin** (colour
+>   gate). Completes the circle from the visible arc. Verified on stills: clean 2.mp4 sits on the iris
+>   (~0.86 edge inliers); fistula often returns None (low contrast) → that frame is invalid, excluded.
+> - **HYBRID engine (`composite_tracker.py`):** features give MOTION; each frame `fit_limbus` is seeded
+>   by the composite centre and pins the disc to the boundary. New drift reasons **`limbus_unfit`** /
+>   **`limbus_disagrees`** (boundary can't be fit, or boundary vs feature centre disagree) → drift,
+>   frame dropped (never rescued, per Dr. K). Emitted `iris_centre`/`iris_radius` = the limbus disc;
+>   eye-local trace now comes from the DISC centre. `frame_confidence` folds in limbus inlier fraction.
+>   FrameMeasurement gains `limbus_inlier_fraction`, `limbus_ellipse`.
+> - **OVERLAY redesigned (`iris_tracker.py`):** the green iris **disc/ellipse + centre cross + the 4
+>   eye-opening landmarks** (cyan: inner/outer canthus, upper/lower margin) are the main object;
+>   internal composite features shrink to faint 1-px helpers. (`draw_overlay`/`draw_composite`.)
+> - **NEW `segments.py` (spec §11 part 2):** classifies every frame valid/blink/occluded/
+>   drift_suspected/tracking_lost, finds continuous VALID segments ≥2 s (high frame-confidence, iris
+>   attached, no blink/drift), plots each segment ALONE (never connects across gaps), lists them
+>   ("Segment 1: 0.41-20.40 s …"), and supports `--approve a,b` / `--reject c` (persisted in
+>   `segments.json`). Final analysis will consume only APPROVED segments. **Nystagmus analysis itself is
+>   NOT built yet** — Dr. K: do not proceed to it until the iris boundary is visually accepted.
+> - **Backward-compat:** `run()` reads old `"pupils"`-key approvals (radius re-derived from MediaPipe).
+> - Validation renders with the disc engine → `outputs/cft_v2/` (2.mp4, fistula, 1.mp4). **Acceptance is
+>   VISUAL: the green circle must stay fitted to the whole iris, not dots/lid/cheek.** Uncommitted.
+
+> **SESSION 2026-06-26 (CFT approved + implemented, renamed, debug replay, validated):**
+> - **SPEC APPROVED.** `EYEVNG_TRACKING_SPECIFICATION.md` is the frozen contract for the V1 engine.
+> - **RENAME (mandated): "Committee Tracker" → "Composite Feature Tracker (CFT)"** throughout — code,
+>   comments, spec, design doc. `committee_tracker.py`→**`src/core/composite_tracker.py`**;
+>   `CommitteeIrisTracker`→**`CompositeFeatureTracker`**; dataclass `Committee`→`Composite`;
+>   `committee_confidence`→`composite_confidence` (incl. CSV cols); drift reason
+>   `committee_disagreement`→`composite_disagreement`; `_vote`/`voters`/`vote()`→
+>   `_compose`/`contributors`/`contribution()`; trackers dict `committee`→`cft`; `draw_committee`→
+>   `draw_composite`; engine flag `--engine committee`→**`--engine composite`** (default). 0 "committee"
+>   left in the tree. Imports verified.
+> - **Engine bug-fixes (the broken Committee run made 0.3% valid on fistula, stuck ~1015 frames in
+>   REACQUIRING):** (1) **recovery deadlock fixed** — recovery now re-anchors on MediaPipe instead of
+>   gating the re-seed on agreement with a stale frozen `last_centre` (the deadlock cause); (2)
+>   **`FB_REJECT` 1.0→2.5px** so the composite survives fast nystagmus/head sweeps (1px collapsed it
+>   below QUORUM in ~3 frames); (3) **age-weight floor 0.3** so a fresh re-seed isn't zero-weighted;
+>   (4) **blink reclassified (§8/§D.8)** — BLINK now requires BOTH a reduced/closed EAR **and** the
+>   composite actually losing the iris (quorum lost). A low EAR alone (gaze excursion / noisy lid
+>   landmarks) no longer fakes a blink. NOTE: this tightens the spec §B BLINK "OR" to an "AND" —
+>   treated as §J blink-threshold calibration, flagged for review.
+> - **Backward-compat:** `run()` now reads the old approved-landmarks `"pupils"` key as well as `"iris"`
+>   (old approvals like 1.mp4 predate the rename); the iris radius is re-derived from MediaPipe anyway.
+> - **DEBUG REPLAY built (spec §10): `debug_replay.py`** — re-runs the CFT and writes a 3.5× zoomed
+>   `debug_replay.mp4` (HUD: state, feature counts, composite conf, FRAME conf, EAR, frame#, time;
+>   features GREEN=trusted / YELLOW=probation / RED=lost). `--live` opens an interactive scrubber
+>   (SPACE play/pause, n/→ step, b/← back, q quit) — GUI untested by agent. Stage 0 unchanged (refuses
+>   without approval). Render verified headless (PNG + readable mp4).
+> - **VALIDATION (engine=composite, reused existing approvals, in `outputs/cft_v1/`):**
+>   2.mp4 **89–90%** valid · 1.mp4 (steady-ish face, real head motion) **76–78%** · fistula (worst case)
+>   **35–39%** (was 0.3% broken; legacy single-template ~15%). Overlays + eye-local traces produced.
+>   **Remaining gap source = composite collapse during fast motion (DRIFT_SUSPECTED + feature_loss),
+>   NOT EAR** — the blink fix barely moved the numbers because the leftover blinks coincided with real
+>   feature loss. Legacy template still beats CFT on the easy clip (2.mp4 99.8% vs 89%). NOT yet at the
+>   >95% / visually-attached bar. Next lever: feature survival / re-detection during fast motion.
+> - **Uncommitted.** Visual acceptance (watch the overlays + `debug_replay.mp4`) is the real test.
+
 > **⚠️ TERMINOLOGY UPDATE (2026-06-26): EyeVNG V1 is now an IRIS tracker.** Code was renamed pupil→iris —
 > `pupil_tracker.py`→`iris_tracker.py`, `src/core/pupil_tracking.py`→`src/core/iris_tracking.py`,
 > `PupilDetector`→`IrisDetector`, `StableTracker`→`IrisTracker`, `refine_pupil`→`refine_iris`,

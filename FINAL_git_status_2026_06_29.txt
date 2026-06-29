@@ -1,0 +1,31 @@
+ M HANDOFF.md
+ M MULTIFEATURE_TRACKER_DESIGN.md
+ M app.py
+ M debug_replay.py
+ M iris_tracker.py
+ M landmark_calibration.json
+ M src/core/eye_contour.py
+ M src/core/limbus.py
+?? Annotate_Iris_DragDrop.bat
+?? Annotate_Vestibular_Neuritis.bat
+?? Approve_Vestibular_Neuritis.bat
+?? CLINIC_HANDOFF_2026_06_29.md
+?? EYE_VNG_DEVELOPMENT_HISTORY.md
+?? FINAL_git_status_2026_06_29.txt
+?? IRIS_IDENTIFICATION_RULES_V2.md
+?? ORBIT_AND_IRIS_TRACKING_RULES_V2.md
+?? Probe_V2_Face_Eye_Zones.bat
+?? Probe_V2_Orbit_Tracking.bat
+?? RECOVERY_current_uncommitted_changes.patch
+?? RECOVERY_git_status_before_restore.txt
+?? RECOVERY_untracked_files.txt
+?? Rescue_Vestibular_Neuritis.bat
+?? TRACKER_REDESIGN.md
+?? Track_Anatomical_Vestibular_Neuritis.bat
+?? Track_V1_Vestibular_Neuritis.bat
+?? V1_CURRENT_CHANGES_AND_RATIONALE.md
+?? src/core/iris_anatomical_tracker.py
+?? src/core/iris_rescue.py
+?? src/core/nystagmus_detector.py
+?? src/core/simple_iris_editor.py
+?? v2/

@@ -168,7 +168,19 @@ def render_frame(frame, trk, fm, contour_state, eye_label, zoom, disp=560, hud_h
 
 
 def pick_eye(approved, want):
-    iris = approved.get("iris") or approved.get("pupils") or {}
+    """Pick the approved eye for the debug replay.
+
+    V1 RULE: only the V1 'iris' block is read here. The legacy `pupils` block is no longer
+    accepted as a silent fallback — it seeds pupil-sized radii (5-9 px) where V1 needs full
+    iris/limbus radii (15-25 px), which broke a known-positive nystagmus clip in testing.
+    Legacy approvals must be re-approved through `python app.py --video ... --approve`.
+    """
+    if approved.get("approval_schema_version") != "v1_iris_limbus_and_eye_contour":
+        raise SystemExit(
+            "Invalid Stage 0 approval for eye_vng V1. V1 requires the V1 approval schema. "
+            "Please rerun --approve and mark the full iris/limbus circle and the "
+            "eye-opening contour.")
+    iris = approved.get("iris") or {}
     have = {k: v for k, v in iris.items() if v}
     if want == "left" and "L" in have:
         return "L", have["L"]

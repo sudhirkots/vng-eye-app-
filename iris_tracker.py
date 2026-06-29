@@ -26,6 +26,8 @@ from src.core.eye_contour import EyeOpeningContourTracker, contour_from_approved
 from src.core.iris_tracking import (APERTURE, CompositeFeatureTracker, EyeObs, FaceLandmarkTracker, IrisDetector,
                                      IrisTracker, PROBATION, TRUSTED, Track, frame_status,
                                      select_init_frame)
+from src.core.nystagmus_detector import (NystagmusDetector, NystagmusParams,
+                                          event_for_frame)
 from src.core.v1_tracker import V1Tracker
 
 APERTURE_NAMES = tuple(APERTURE.keys())   # the 8 eye-aperture landmark names (4 per eye)
@@ -334,74 +336,357 @@ def load_approved(output_dir, video_path):
     return json.loads(p.read_text()) if p.exists() else None
 
 
+def _seed_contour_polygon(face_pts, eye_key, n=24):
+    """Seed an eye-opening contour polygon for ONE eye from the four approved face landmarks
+    (inner_canthus, outer_canthus, upper_margin, lower_margin). The seed is a smooth ellipse
+    through the four points so the clinician usually just confirms or refines a few vertices.
+    NOTE: this seed is a STARTING POINT for clinician approval, NOT a silent fallback. If
+    the clinician approves the seed unchanged, it is still a clinician-approved contour.
+    Returns a numpy array of (x,y) points or None if any of the four landmarks is missing."""
+    nm = {t: f"{t}_{eye_key}" for t in
+          ("inner_canthus", "outer_canthus", "upper_margin", "lower_margin")}
+    if not all(face_pts.get(nm[t]) for t in nm):
+        return None
+    inner = np.asarray(face_pts[nm["inner_canthus"]], float)
+    outer = np.asarray(face_pts[nm["outer_canthus"]], float)
+    upper = np.asarray(face_pts[nm["upper_margin"]], float)
+    lower = np.asarray(face_pts[nm["lower_margin"]], float)
+    centre = (inner + outer + upper + lower) / 4.0
+    width = max(10.0, float(np.hypot(*(outer - inner))))
+    height = max(8.0, float(np.hypot(*(lower - upper))))
+    angle = float(np.arctan2(outer[1] - inner[1], outer[0] - inner[0]))
+    ca, sa = np.cos(angle), np.sin(angle)
+    ts = np.linspace(0.0, 2.0 * np.pi, n, endpoint=False)
+    pts = []
+    for t in ts:
+        x = 0.5 * width * np.cos(t)
+        y = 0.5 * height * np.sin(t)
+        pts.append((centre[0] + ca * x - sa * y, centre[1] + sa * x + ca * y))
+    return np.asarray(pts, np.float32)
+
+
+def _validate_iris_seed(centre_xy, radius, interocular_px=None):
+    """Sanity-check the approved iris seed. Returns (ok, reason).
+
+    'pupil-sized' detection: a real iris radius is typically 8-14% of inter-canthal distance
+    (clinical anatomy) and rarely below ~10 px on a 1080p face crop. The legacy 'pupils'
+    schema produced radii around 3-8 px on the same clips, which is too small for an iris
+    and indicates the clinician marked the pupil, not the limbus."""
+    if centre_xy is None or radius is None:
+        return False, "missing"
+    if radius < 9.0:
+        return False, "iris_radius_too_small_likely_pupil"
+    if interocular_px and interocular_px > 50 and radius < 0.05 * interocular_px:
+        return False, "iris_radius_too_small_for_anatomy"
+    return True, ""
+
+
+def _validate_eye_opening_contour(contour_pts, iris_centre, iris_radius):
+    """Sanity-check the approved eye-opening contour for one eye.
+      * must have enough points (>= 8) to count as a real contour, not four landmarks,
+      * must SURROUND the iris seed (the iris centre must lie inside the polygon),
+      * must be reasonably large vs the iris radius (the palpebral fissure cannot be smaller
+        than the iris it shows).
+    Returns (ok, reason)."""
+    if contour_pts is None or len(contour_pts) < 8:
+        return False, "contour_missing_or_too_few_points"
+    if iris_centre is None or iris_radius is None:
+        return False, "no_iris_seed_to_validate_against"
+    pts = np.asarray(contour_pts, np.float32)
+    # bbox span check
+    span_x = float(pts[:, 0].max() - pts[:, 0].min())
+    span_y = float(pts[:, 1].max() - pts[:, 1].min())
+    if span_x < 2.0 * iris_radius or span_y < 1.0 * iris_radius:
+        return False, "contour_too_small_for_iris"
+    # iris centre must be inside the contour polygon
+    inside = cv2.pointPolygonTest(pts.reshape(-1, 1, 2),
+                                  (float(iris_centre[0]), float(iris_centre[1])), False)
+    if inside < 0:
+        return False, "iris_centre_outside_contour"
+    return True, ""
+
+
 def approve_interactive(frame, le, re, faces):
-    """Interactive Stage 0 confirmation screen. Shows the frame with the proposed
-    iris (green circles) and facial landmarks (amber dots), labelled. The user
-    drags any point to the correct spot, resizes a iris with the wheel or [ ],
-    toggles a point off/on with 'd' (unavailable), then presses Enter to APPROVE.
-    A magnifier follows the cursor for precise placement. Returns (iris, faces)."""
+    """V1 Stage-0 ASSISTED ANATOMICAL APPROVAL screen (locked 2026-06-27).
+
+    Workflow: app PROPOSES → clinician VERIFIES & CORRECTS → clinician APPROVES.
+
+    This is NOT a blank manual drawing tool. The app proposes all three anatomical structures
+    automatically; the clinician's role is to verify the proposals and correct only what is
+    wrong, then press ONE Enter to APPROVE everything.
+
+    Proposals shown on entry:
+      1. Full iris / limbus circle per eye, sized to MediaPipe's iris-boundary estimate plus a
+         small safety margin so the initial circle reliably covers the coloured iris out to the
+         white sclera. NOT the pupil.
+      2. Iris centre (centre of that circle).
+      3. Eye-opening / orbital margin contour, seeded as a smooth ellipse through the four face
+         landmarks (canthi + lid margins). The clinician refines it to the visible palpebral
+         fissure if the seed is off.
+      4. Usable-eye status — both eyes default to usable when MediaPipe detected them.
+
+    Editing modes (cycle with Tab, also pickable with i / f / c):
+      * 'i' — IRIS / LIMBUS mode: drag the centre; +/- to resize the limbus circle; d off/on.
+      * 'f' — FACE LANDMARK mode: drag a canthus/lid-margin; d off/on.
+      * 'c' — CONTOUR mode: drag vertices; a=add vertex under cursor; x=delete vertex;
+              e=switch to the other eye's contour.
+    Other keys: m = magnifier on/off; Enter = APPROVE everything; q = cancel.
+
+    Returns (iris_dict, faces_dict, contours_dict).
+    """
     H, W = frame.shape[:2]
     scale = min(1.0, 1200.0 / W)
     DW, DH = int(W * scale), int(H * scale)
 
-    items = []
+    # ---- IRIS items: ONE PROPOSED CIRCLE PER EYE -------------------------------
+    # The proposal is the FULL iris/limbus circle, NOT the small dark pupil. We start from
+    # MediaPipe's iris-boundary estimate (already the limbus radius) and enlarge it by a
+    # small safety margin so the initial display reliably covers the visible iris out to
+    # the white sclera. The clinician verifies and adjusts; they do not draw from scratch.
+    IRIS_PROPOSAL_RADIUS_MARGIN = 1.10   # +10% to be more likely to start on the limbus, not inside it
+    iris_items = []
     for key, e, dx in (("L", le, 0.35), ("R", re, 0.65)):
         if e.detected:
-            items.append({"kind": "iris", "name": key, "x": e.x, "y": e.y, "r": max(4.0, e.radius), "on": True})
+            proposed_r = max(8.0, e.radius * IRIS_PROPOSAL_RADIUS_MARGIN)
+            iris_items.append({"name": key, "x": e.x, "y": e.y,
+                                "r": proposed_r, "on": True})
         else:
-            items.append({"kind": "iris", "name": key, "x": W * dx, "y": H * 0.5, "r": 15.0, "on": False})
+            iris_items.append({"name": key, "x": W * dx, "y": H * 0.5,
+                                "r": 15.0, "on": False})
+    # ---- FACE landmark items ---------------------------------------------------
+    face_items = []
     for name, pt in faces.items():
         on = pt is not None
-        items.append({"kind": "face", "name": name,
-                      "x": pt[0] if on else W * 0.5, "y": pt[1] if on else H * 0.5, "r": None, "on": on})
+        face_items.append({"name": name,
+                            "x": pt[0] if on else W * 0.5, "y": pt[1] if on else H * 0.5,
+                            "on": on})
+    # ---- EYE-OPENING CONTOUR: one EDITABLE OVAL per usable eye -----------------
+    # Each contour is a parameterised ellipse: centre (cx, cy), half-width a (along the
+    # inner-outer canthus axis), half-height b (perpendicular), rotation angle theta.
+    # The clinician edits ONE oval per eye via four handles (medial, lateral, upper, lower)
+    # + the centre + rotation, not a 24-vertex polygon. On APPROVE the oval is sampled at
+    # 24 points and written into approved_landmarks.json as the eye_opening_contours
+    # polygon — so the runtime, validator, and tracker stay unchanged.
+    def _faces_dict():
+        return {it["name"]: (it["x"], it["y"]) for it in face_items if it["on"]}
+    contours = {}    # key -> {"cx","cy","a","b","theta"}  half-axes and rotation in radians
+    for it in iris_items:
+        if not it["on"]:
+            continue
+        fd = _faces_dict()
+        nm = {t: f"{t}_{it['name']}" for t in
+              ("inner_canthus", "outer_canthus", "upper_margin", "lower_margin")}
+        if all(fd.get(nm[t]) for t in nm):
+            inner = np.asarray(fd[nm["inner_canthus"]], float)
+            outer = np.asarray(fd[nm["outer_canthus"]], float)
+            upper = np.asarray(fd[nm["upper_margin"]], float)
+            lower = np.asarray(fd[nm["lower_margin"]], float)
+            centre = (inner + outer + upper + lower) / 4.0
+            a = max(10.0, 0.5 * float(np.hypot(*(outer - inner))))
+            b = max(8.0, 0.5 * float(np.hypot(*(lower - upper))))
+            theta = float(np.arctan2(outer[1] - inner[1], outer[0] - inner[0]))
+        else:
+            # Fallback: seed an oval around the iris itself, slightly wider than tall.
+            centre = np.array([it["x"], it["y"]], float)
+            a = 2.6 * it["r"]
+            b = 1.4 * it["r"]
+            theta = 0.0
+        contours[it["name"]] = {"cx": float(centre[0]), "cy": float(centre[1]),
+                                  "a": float(a), "b": float(b), "theta": float(theta)}
 
-    st_ = {"sel": 0, "drag": False, "mx": 0, "my": 0, "mag": True}
+    def _ellipse_handle_positions(e):
+        """Return the four cardinal handle positions of an ellipse e in IMAGE coords:
+        medial (−a), lateral (+a), upper (−b), lower (+b)."""
+        cx, cy, a, b, th = e["cx"], e["cy"], e["a"], e["b"], e["theta"]
+        ca, sa = np.cos(th), np.sin(th)
+        return {
+            "medial":  (cx - a * ca, cy - a * sa),
+            "lateral": (cx + a * ca, cy + a * sa),
+            "upper":   (cx - b * (-sa), cy - b * ca),    # perpendicular axis: rotate +90°
+            "lower":   (cx + b * (-sa), cy + b * ca),
+        }
 
-    def nearest_center(ix, iy):
+    def _ellipse_to_polygon(e, n=24):
+        """Sample an ellipse to n polygon points (the format the runtime expects)."""
+        ts = np.linspace(0.0, 2.0 * np.pi, n, endpoint=False)
+        ca, sa = np.cos(e["theta"]), np.sin(e["theta"])
+        pts = []
+        for t in ts:
+            x = e["a"] * np.cos(t)
+            y = e["b"] * np.sin(t)
+            pts.append((e["cx"] + ca * x - sa * y,
+                        e["cy"] + sa * x + ca * y))
+        return np.asarray(pts, np.float32)
+
+    MODE_IRIS, MODE_FACE, MODE_CONTOUR = "iris", "face", "contour"
+    # contour_handle ∈ {"centre","medial","lateral","upper","lower"} — names the dragged handle.
+    st_ = {"mode": MODE_IRIS, "iris_sel": 0, "face_sel": 0,
+           "contour_eye": next(iter(contours), "L"),
+           "contour_handle": "centre",
+           # Magnifier inset is OFF by default — clinicians find it distracting on the
+           # large overview; the editor handles + label text are sized for the unzoomed view.
+           # Toggle on/off at any time with the `m` key.
+           "drag": False, "mx": 0, "my": 0, "mag": False}
+
+    def _nearest_iris(ix, iy):
         best = None
-        for i, it in enumerate(items):
+        for i, it in enumerate(iris_items):
             d = np.hypot(it["x"] - ix, it["y"] - iy)
             if best is None or d < best[0]:
                 best = (d, i)
         return best[1] if best and best[0] < 45 / scale else None
 
+    def _nearest_face(ix, iy):
+        best = None
+        for i, it in enumerate(face_items):
+            d = np.hypot(it["x"] - ix, it["y"] - iy)
+            if best is None or d < best[0]:
+                best = (d, i)
+        return best[1] if best and best[0] < 45 / scale else None
+
+    def _nearest_handle(ix, iy):
+        """Find the nearest editable point (centre or one of the four cardinal handles) of
+        the CURRENTLY-SELECTED eye's ellipse. Returns its name or None if too far."""
+        key = st_["contour_eye"]
+        if key not in contours:
+            return None
+        e = contours[key]
+        handles = _ellipse_handle_positions(e)
+        handles["centre"] = (e["cx"], e["cy"])
+        best = None
+        for name, (hx, hy) in handles.items():
+            d = np.hypot(hx - ix, hy - iy)
+            if best is None or d < best[0]:
+                best = (d, name)
+        return best[1] if best and best[0] < 40 / scale else None
+
+    def _auto_select_contour_eye(ix, iy):
+        """2026-06-28: in CONTOUR mode, click anywhere near an oval to make THAT oval
+        active. Removes the 'why can't I move the left eye' bug: the user no longer
+        needs to remember the `e` shortcut. The nearest eye (by centre distance) wins."""
+        best = None
+        for key, e in contours.items():
+            d = np.hypot(e["cx"] - ix, e["cy"] - iy)
+            if best is None or d < best[0]:
+                best = (d, key)
+        if best is not None:
+            st_["contour_eye"] = best[1]
+            st_["contour_handle"] = "centre"
+
+    def _drag_handle(key, handle, ix, iy):
+        """Update ellipse parameters when the named handle is dragged to (ix, iy)."""
+        e = contours[key]
+        if handle == "centre":
+            e["cx"], e["cy"] = float(ix), float(iy)
+            return
+        # vector from centre to cursor (in image coords); decompose along (theta) and the
+        # perpendicular axis so dragging a side handle only resizes that side.
+        dx, dy = float(ix - e["cx"]), float(iy - e["cy"])
+        ca, sa = np.cos(e["theta"]), np.sin(e["theta"])
+        proj_long = dx * ca + dy * sa             # signed projection along the long axis
+        proj_perp = -dx * sa + dy * ca            # signed projection along the perpendicular
+        if handle == "medial":
+            e["a"] = max(8.0, -proj_long)         # medial handle is on the -a side
+        elif handle == "lateral":
+            e["a"] = max(8.0,  proj_long)         # lateral handle is on the +a side
+        elif handle == "upper":
+            e["b"] = max(6.0, -proj_perp)
+        elif handle == "lower":
+            e["b"] = max(6.0,  proj_perp)
+
     def on_mouse(ev, x, y, flags, _):
-        # mouse ONLY moves a point (drag); radius is changed with + / - keys
         st_["mx"], st_["my"] = x, y
         ix, iy = x / scale, y / scale
         if ev == cv2.EVENT_LBUTTONDOWN:
-            i = nearest_center(ix, iy)
-            if i is not None:
-                st_["sel"], st_["drag"] = i, True
-                items[i]["on"] = True
+            if st_["mode"] == MODE_IRIS:
+                i = _nearest_iris(ix, iy)
+                if i is not None:
+                    st_["iris_sel"], st_["drag"] = i, True
+                    iris_items[i]["on"] = True
+            elif st_["mode"] == MODE_FACE:
+                i = _nearest_face(ix, iy)
+                if i is not None:
+                    st_["face_sel"], st_["drag"] = i, True
+                    face_items[i]["on"] = True
+            elif st_["mode"] == MODE_CONTOUR:
+                # Auto-switch active eye to whichever oval's centre is closer to the
+                # click BEFORE looking for a handle. This fixes the 'left eye contour
+                # won't move' bug — previously _nearest_handle only searched the
+                # currently-selected eye, so a click on the OTHER eye's oval did
+                # nothing.
+                _auto_select_contour_eye(ix, iy)
+                h = _nearest_handle(ix, iy)
+                if h is not None:
+                    st_["contour_handle"], st_["drag"] = h, True
         elif ev == cv2.EVENT_MOUSEMOVE and st_["drag"]:
-            items[st_["sel"]].update(x=ix, y=iy)
+            if st_["mode"] == MODE_IRIS:
+                iris_items[st_["iris_sel"]].update(x=ix, y=iy)
+            elif st_["mode"] == MODE_FACE:
+                face_items[st_["face_sel"]].update(x=ix, y=iy)
+            elif st_["mode"] == MODE_CONTOUR:
+                key = st_["contour_eye"]
+                if key in contours:
+                    _drag_handle(key, st_["contour_handle"], ix, iy)
         elif ev == cv2.EVENT_LBUTTONUP:
             st_["drag"] = False
 
-    win = "Stage 0 - confirm landmarks"
+    win = "Stage 0 - V1 anatomical approval"
     cv2.namedWindow(win)
     cv2.setMouseCallback(win, on_mouse)
+    # 2026-06-28: clinician decision — Stage 0 is iris + orbital oval only. The face
+    # landmarks still get detected by MediaPipe and still seed the initial oval, but
+    # they are no longer a clinician-editable mode. Tab now cycles IRIS<->CONTOUR.
+    HUD = ("VERIFY & CORRECT - modes: [i]ris/limbus  [c]ontour-oval  (Tab cycles)    "
+           "i: drag centre, +/- resize, d off/on   "
+           "c: click ANY eye to select it, drag centre or cardinal handles, "
+           "+/- resize active axis, r/R rotate   "
+           "m magnifier   Enter = APPROVE everything   q = cancel")
     while True:
         disp = cv2.resize(frame, (DW, DH))
-        for i, it in enumerate(items):
-            sel = (i == st_["sel"])
-            col = (0, 255, 255) if sel else ((0, 200, 0) if it["kind"] == "iris" else (0, 165, 255))
-            if not it["on"]:
-                col = (130, 130, 130)
+        # IRIS circles — always drawn; selected one cyan when in IRIS mode
+        for i, it in enumerate(iris_items):
+            sel = (i == st_["iris_sel"] and st_["mode"] == MODE_IRIS)
+            col = (0, 255, 255) if sel else ((0, 200, 0) if it["on"] else (130, 130, 130))
             p = (int(it["x"] * scale), int(it["y"] * scale))
-            lbl = (f"{it['name']} r{int(it['r'])}" if it["kind"] == "iris"
-                   else FACE_CODE.get(it["name"], it["name"]))
-            if not it["on"]:
-                lbl += " OFF"
-            if it["kind"] == "iris":
-                cv2.circle(disp, p, max(3, int((it["r"] or 10) * scale)), col, 2)
-                cv2.circle(disp, p, 2, col, -1)
-            else:
-                cv2.circle(disp, p, 4, col, -1)
-            cv2.putText(disp, lbl, (p[0] + 6, p[1] - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.5, col, 1)
-        # magnifier inset around the cursor — placed in the corner OPPOSITE the cursor so it never
-        # covers the point being edited (toggle with 'm')
+            cv2.circle(disp, p, max(3, int((it["r"] or 10) * scale)), col, 2, cv2.LINE_AA)
+            cv2.circle(disp, p, 2, col, -1)
+            lbl = f"{it['name']}-iris r{int(it['r'])}{'' if it['on'] else ' OFF'}"
+            cv2.putText(disp, lbl, (p[0] + 6, p[1] - 6),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, col, 1)
+        # FACE landmarks are NOT drawn in the UI any more (Stage 0 is iris + orbital
+        # oval only). The face_items still exist so the contour seeding code (above)
+        # works and so faces_out below saves into approved_landmarks.json for the V1
+        # default engine. They are simply invisible to the clinician.
+        # EYE-OPENING CONTOURS — drawn as an OVAL per eye using cv2.ellipse.
+        # In contour mode the active eye also shows 5 draggable handles (centre + 4 cardinal).
+        for key, e in contours.items():
+            is_active = (st_["mode"] == MODE_CONTOUR and key == st_["contour_eye"])
+            col = (255, 255, 0) if is_active else \
+                  ((180, 180, 0) if st_["mode"] == MODE_CONTOUR else (140, 140, 0))
+            cv2.ellipse(disp,
+                        (int(e["cx"] * scale), int(e["cy"] * scale)),
+                        (max(2, int(e["a"] * scale)), max(2, int(e["b"] * scale))),
+                        float(np.degrees(e["theta"])), 0, 360, col,
+                        2 if is_active else 1, cv2.LINE_AA)
+            if st_["mode"] == MODE_CONTOUR:
+                handles = _ellipse_handle_positions(e)
+                handles["centre"] = (e["cx"], e["cy"])
+                # Cardinal handles are square; centre is a diamond. Selected handle is cyan.
+                for name, (hx, hy) in handles.items():
+                    pp = (int(hx * scale), int(hy * scale))
+                    sel = (is_active and name == st_["contour_handle"])
+                    hcol = (0, 255, 255) if sel else col
+                    if name == "centre":
+                        cv2.drawMarker(disp, pp, hcol, cv2.MARKER_DIAMOND,
+                                       12 if sel else 9, 2, cv2.LINE_AA)
+                    else:
+                        sz = 5 if sel else 4
+                        cv2.rectangle(disp, (pp[0] - sz, pp[1] - sz),
+                                      (pp[0] + sz, pp[1] + sz), hcol, -1)
+                    if is_active:
+                        cv2.putText(disp, name[:3], (pp[0] + 7, pp[1] - 7),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, hcol, 1, cv2.LINE_AA)
+        # MAGNIFIER inset
         ix, iy = int(st_["mx"] / scale), int(st_["my"] / scale)
         Z, rad = 4, 36
         x0, y0 = max(0, ix - rad), max(0, iy - rad)
@@ -409,18 +694,30 @@ def approve_interactive(frame, le, re, faces):
         crop = frame[y0:y1, x0:x1]
         if st_["mag"] and crop.size:
             mag = cv2.resize(crop, None, fx=Z, fy=Z, interpolation=cv2.INTER_NEAREST)
-            cv2.drawMarker(mag, (int((ix - x0) * Z), int((iy - y0) * Z)), (0, 0, 255), cv2.MARKER_CROSS, 18, 1)
+            cv2.drawMarker(mag, (int((ix - x0) * Z), int((iy - y0) * Z)),
+                           (0, 0, 255), cv2.MARKER_CROSS, 18, 1)
             mh, mw = mag.shape[:2]
             if mw <= DW and mh <= DH:
                 cv2.rectangle(mag, (0, 0), (mw - 1, mh - 1), (0, 0, 255), 1)
-                mx0 = 0 if st_["mx"] > DW / 2 else DW - mw      # cursor right → inset left, & vice-versa
-                my0 = (DH - mh) if st_["my"] < DH / 2 else 0     # cursor top → inset bottom, & vice-versa
+                mx0 = 0 if st_["mx"] > DW / 2 else DW - mw
+                my0 = (DH - mh) if st_["my"] < DH / 2 else 0
                 disp[my0:my0 + mh, mx0:mx0 + mw] = mag
-        sel_it = items[st_["sel"]]
-        sel_lbl = sel_it["name"] if sel_it["kind"] == "iris" else FACE_CODE.get(sel_it["name"], sel_it["name"])
-        cv2.putText(disp, f"selected: {sel_lbl}   drag = move point   + / - = iris size"
-                    "   d = off/on   m = magnifier   Enter = APPROVE   q = cancel",
-                    (8, DH - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        # MODE banner + instruction line
+        # On-screen wording reflects the propose-verify-approve workflow: the app HAS proposed
+        # the anatomy; the clinician VERIFIES (and corrects only what's wrong) before APPROVE.
+        mode_lbl = {
+            MODE_IRIS:    "VERIFY: proposed full iris / limbus circle. It should cover the "
+                          "coloured iris out to the white sclera. Do not mark the pupil.",
+            MODE_FACE:    "",   # face mode is hidden from the UI as of 2026-06-28
+            MODE_CONTOUR: f"VERIFY: proposed eye-opening / orbital margin OVAL "
+                          f"({st_['contour_eye']} eye, click the other eye's oval to switch). "
+                          "Drag centre or any cardinal handle to reshape.",
+        }[st_["mode"]]
+        cv2.rectangle(disp, (0, 0), (DW, 28), (0, 0, 0), -1)
+        cv2.putText(disp, mode_lbl, (8, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
+                    (255, 255, 255), 1, cv2.LINE_AA)
+        cv2.putText(disp, HUD, (8, DH - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                    (255, 255, 255), 1)
         cv2.imshow(win, disp)
         k = cv2.waitKey(20) & 0xFF
         if k in (13, 32):
@@ -428,26 +725,85 @@ def approve_interactive(frame, le, re, faces):
         if k == ord("q"):
             cv2.destroyAllWindows()
             raise SystemExit("Cancelled — nothing approved.")
-        if k in (ord("-"), ord("+"), ord("=")):
-            it = items[st_["sel"]]
-            if it["kind"] == "iris":
+        # mode switch — FACE mode is now hidden from the UI per 2026-06-28 decision
+        # (Stage 0 is iris + orbital oval only). `f` is a no-op so accidental presses
+        # are harmless; Tab cycles only IRIS <-> CONTOUR.
+        if k == ord("i"): st_["mode"] = MODE_IRIS
+        elif k == ord("c"): st_["mode"] = MODE_CONTOUR
+        elif k == 9:  # Tab cycles mode
+            order = [MODE_IRIS, MODE_CONTOUR]
+            st_["mode"] = order[(order.index(st_["mode"]) + 1) % 2] \
+                if st_["mode"] in order else MODE_IRIS
+        # mode-specific actions
+        if st_["mode"] == MODE_IRIS:
+            if k in (ord("-"), ord("+"), ord("=")):
+                it = iris_items[st_["iris_sel"]]
                 it["r"] = max(3.0, it["r"] + (1 if k in (ord("+"), ord("=")) else -1))
-        if k == ord("d"):
-            items[st_["sel"]]["on"] = not items[st_["sel"]]["on"]
+            elif k == ord("d"):
+                iris_items[st_["iris_sel"]]["on"] = not iris_items[st_["iris_sel"]]["on"]
+        elif st_["mode"] == MODE_FACE:
+            if k == ord("d"):
+                face_items[st_["face_sel"]]["on"] = not face_items[st_["face_sel"]]["on"]
+        elif st_["mode"] == MODE_CONTOUR:
+            key = st_["contour_eye"]
+            if key in contours:
+                e_ = contours[key]
+                # ±/[/] adjust the active half-axis without mouse — fine tuning.
+                if k in (ord("+"), ord("=")):
+                    if st_["contour_handle"] in ("medial", "lateral"):
+                        e_["a"] = e_["a"] + 1.0
+                    elif st_["contour_handle"] in ("upper", "lower"):
+                        e_["b"] = e_["b"] + 1.0
+                    else:
+                        e_["a"] += 1.0
+                        e_["b"] += 1.0
+                elif k == ord("-"):
+                    if st_["contour_handle"] in ("medial", "lateral"):
+                        e_["a"] = max(8.0, e_["a"] - 1.0)
+                    elif st_["contour_handle"] in ("upper", "lower"):
+                        e_["b"] = max(6.0, e_["b"] - 1.0)
+                    else:
+                        e_["a"] = max(8.0, e_["a"] - 1.0)
+                        e_["b"] = max(6.0, e_["b"] - 1.0)
+                # Rotate the oval: r counter-clockwise, R clockwise. Step ~1.5°.
+                elif k == ord("r"):
+                    e_["theta"] -= np.deg2rad(1.5)
+                elif k == ord("R"):
+                    e_["theta"] += np.deg2rad(1.5)
+            if k == ord("e") or k == ord("E"):
+                # switch which eye's oval is being edited.
+                eyes = [k for k in ("L", "R") if k in contours]
+                if len(eyes) > 1:
+                    cur = st_["contour_eye"]
+                    st_["contour_eye"] = eyes[(eyes.index(cur) + 1) % len(eyes)]
+                    st_["contour_handle"] = "centre"
         if k == ord("m"):
             st_["mag"] = not st_["mag"]
     cv2.destroyAllWindows()
-    iris = {it["name"]: ((it["x"], it["y"], it["r"]) if it["on"] else None)
-              for it in items if it["kind"] == "iris"}
+    iris_out = {it["name"]: ((it["x"], it["y"], it["r"]) if it["on"] else None)
+                for it in iris_items}
     faces_out = {it["name"]: ((it["x"], it["y"]) if it["on"] else None)
-                 for it in items if it["kind"] == "face"}
-    return iris, faces_out
+                 for it in face_items}
+    # SAMPLE each approved ellipse to a 24-vertex polygon so the runtime/validator/JSON
+    # schema stay unchanged. The clinician edited an oval; the rest of the system sees a
+    # polygon, exactly as before.
+    contours_out = {k: _ellipse_to_polygon(e, n=24)
+                    for k, e in contours.items() if iris_out.get(k) is not None}
+    return iris_out, faces_out, contours_out
 
 
 def approve(video_path, output_dir="outputs", auto=False):
     """STAGE 0 — propose landmarks, let the user review/correct, then APPROVE and
     save approved_landmarks.json. Tracking refuses to run until this exists.
-    auto=True accepts the proposal without a GUI (headless)."""
+    auto=True accepts the proposal without a GUI (headless).
+
+    Workflow (locked 2026-06-27): **app-assisted but clinician-controlled**.
+    The app proposes iris/limbus and eye-opening-contour markings using MediaPipe; the
+    clinician verifies and can override poor proposals (drag, resize, redraw vertices) within
+    the single editor window; one Enter approves the entire setup. There is NO automatic
+    frame picker — the clinician chooses to accept whatever default init frame the detector
+    selects, and overrides anything that looks wrong directly in the editor.
+    """
     video_path = Path(video_path)
     detector = IrisDetector()
     init = select_init_frame(detector, video_path)
@@ -464,10 +820,26 @@ def approve(video_path, output_dir="outputs", auto=False):
     if auto:
         confirmed = detected
         faces_out = faces
+        # Seed contour from the four face landmarks; the clinician sees no GUI so this is a
+        # legacy four-point fallback explicitly. Recorded in approved_landmarks.json below.
+        contours_out = {}
+        for key in ("L", "R"):
+            if confirmed.get(key) is None:
+                continue
+            seed = _seed_contour_polygon(faces_out, key, n=24)
+            if seed is not None:
+                contours_out[key] = seed
         print("--auto-approve: accepting the proposed iris + face landmarks without review.")
     else:
-        print("Stage 0: drag points to correct them, wheel/[ ] resize iris, d=off/on, Enter=APPROVE.")
-        confirmed, faces_out = approve_interactive(frame, le, re, faces)
+        print("Stage 0: V1 ASSISTED ANATOMICAL APPROVAL — propose → verify → approve.")
+        print("  The app has proposed:")
+        print("    1. the full iris / limbus circle (coloured iris out to the white sclera)")
+        print("    2. the iris centre")
+        print("    3. the eye-opening / orbital margin contour")
+        print("    4. usable-eye status")
+        print("  Your role: verify and correct only what is wrong, then press Enter to APPROVE.")
+        print("  Do NOT mark the pupil. Approve everything in ONE Enter; q to cancel.")
+        confirmed, faces_out, contours_out = approve_interactive(frame, le, re, faces)
         # LEARN: fold the clinician's corrections (vs the RAW MediaPipe proposal) into the calibration
         learned = update_calibration(faces_out, faces_raw)
         if learned:
@@ -475,6 +847,53 @@ def approve(video_path, output_dir="outputs", auto=False):
                   f"{json.dumps({k: {kk: round(vv, 3) for kk, vv in v.items()} for k, v in learned['offsets'].items()})}")
     if confirmed["L"] is None and confirmed["R"] is None:
         raise SystemExit("No usable eye approved.")
+
+    # ---- V1 STAGE 0 VALIDATION ---------------------------------------------------
+    # Each "usable" eye must have BOTH a credible iris/limbus seed AND a credible eye-opening
+    # contour. Fail loudly here so the clinician can correct, rather than letting an invalid
+    # approval reach the tracker and the detector.
+    interocular_px = None
+    if confirmed.get("L") and confirmed.get("R"):
+        interocular_px = float(abs(confirmed["R"][0] - confirmed["L"][0]))
+    per_eye_validity = {}
+    failures = []
+    legacy_pupil_fallback_used = False
+    legacy_four_point_contour_fallback_used = False
+    for key in ("L", "R"):
+        iris_tuple = confirmed.get(key)
+        if iris_tuple is None:
+            per_eye_validity[key] = {"usable_for_v1": False,
+                                      "iris_limbus_approved": False,
+                                      "eye_opening_contour_approved": False,
+                                      "reason": "eye_marked_unavailable"}
+            continue
+        ok_iris, why_iris = _validate_iris_seed((iris_tuple[0], iris_tuple[1]),
+                                                 iris_tuple[2], interocular_px)
+        if not ok_iris and why_iris == "iris_radius_too_small_likely_pupil":
+            legacy_pupil_fallback_used = True
+        contour_pts = contours_out.get(key)
+        ok_contour, why_contour = _validate_eye_opening_contour(
+            contour_pts, (iris_tuple[0], iris_tuple[1]), iris_tuple[2])
+        if contour_pts is None or len(contour_pts) < 8:
+            legacy_four_point_contour_fallback_used = True
+        per_eye_validity[key] = {
+            "usable_for_v1": (ok_iris and ok_contour),
+            "iris_limbus_approved": ok_iris,
+            "eye_opening_contour_approved": ok_contour,
+            "iris_validation_reason": why_iris,
+            "contour_validation_reason": why_contour,
+        }
+        if not ok_iris:
+            failures.append(f"  - {key}: iris/limbus invalid ({why_iris})")
+        if not ok_contour:
+            failures.append(f"  - {key}: eye-opening contour invalid ({why_contour})")
+
+    if failures:
+        raise SystemExit(
+            "Invalid Stage 0 approval for eye_vng V1. V1 requires both full iris/limbus approval "
+            "AND eye-opening contour approval. Please rerun --approve and mark the iris/limbus "
+            "circle (full coloured iris out to the white sclera, NOT the pupil) and the "
+            "eye-opening contour (visible palpebral fissure). Failures:\n" + "\n".join(failures))
 
     cap = cv2.VideoCapture(str(video_path))
     w, h, fps = int(cap.get(3)), int(cap.get(4)), cap.get(5) or 30.0
@@ -485,14 +904,46 @@ def approve(video_path, output_dir="outputs", auto=False):
         "video": str(video_path), "resolution": f"{w}x{h}", "fps": round(fps, 2),
         "init_frame_number": fr, "approved": True,
         "approved_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        # ---- V1 APPROVAL SCHEMA (added 2026-06-27) -------------------------------
+        "approval_schema_version": "v1_iris_limbus_and_eye_contour",
+        "tracking_target": "iris_limbus",
+        "reference_target": "eye_opening_contour",
+        "iris_limbus_approved": all(per_eye_validity[k]["iris_limbus_approved"]
+                                     for k in per_eye_validity
+                                     if per_eye_validity[k]["usable_for_v1"]),
+        "eye_opening_contour_approved": all(per_eye_validity[k]["eye_opening_contour_approved"]
+                                             for k in per_eye_validity
+                                             if per_eye_validity[k]["usable_for_v1"]),
+        "legacy_pupil_fallback_used": legacy_pupil_fallback_used,
+        "legacy_four_point_contour_fallback_used": legacy_four_point_contour_fallback_used,
+        # ---- per-eye validity: NEW "eyes" block is the canonical V1 schema (matches the
+        # locked spec). "per_eye_validity" is retained as an alias for downstream tooling.
+        "eyes": {k: {"usable_for_v1": v["usable_for_v1"],
+                      "iris_limbus_approved": v["iris_limbus_approved"],
+                      "eye_opening_contour_approved": v["eye_opening_contour_approved"]}
+                 for k, v in per_eye_validity.items()},
+        "per_eye_validity": per_eye_validity,
+        # ---- approved geometry --------------------------------------------------
         "iris": {k: ({"x": round(v[0], 2), "y": round(v[1], 2), "radius": round(v[2], 2)} if v else None)
                    for k, v in confirmed.items()},
         "face_landmarks": {name: ({"x": round(p[0], 2), "y": round(p[1], 2)} if p else None)
                            for name, p in faces_out.items()},
+        "eye_opening_contours": {
+            k: ([{"x": round(float(p[0]), 2), "y": round(float(p[1]), 2)}
+                 for p in pts])
+            for k, pts in contours_out.items()
+        },
     }
+    # V1 NEVER writes a "pupils" key. The presence of "pupils" anywhere downstream is the
+    # symptom of a legacy approval; the V1 runtime gate refuses such files.
+    assert "pupils" not in data, "V1 approval must not contain 'pupils' — that is the legacy schema"
     path = out_dir / "approved_landmarks.json"
     path.write_text(json.dumps(data, indent=2))
     print(f"APPROVED — saved {path}")
+    print(f"  schema: {data['approval_schema_version']}")
+    print(f"  iris_limbus_approved: {data['iris_limbus_approved']}  "
+          f"eye_opening_contour_approved: {data['eye_opening_contour_approved']}")
+    print(f"  eyes: {data['eyes']}")
     print(f'Now run tracking:  python app.py --video "{video_path}"')
     return path
 
@@ -564,6 +1015,70 @@ def draw_overlay(frame, scale, lt: Track, rt: Track, fstatus, fr, t, face_tracks
     return vis
 
 
+def draw_clinical_overlay(frame, scale, lt: Track, rt: Track,
+                          selected_image_eye=None, contours=None):
+    """V1 CLINICAL overlay mode — minimal display per the V1 UI rules.
+
+    Shows ONLY:
+      * the video frame,
+      * the eye-opening contour as a thin cyan polyline (verification — we need to see that the
+        reference frame is correctly tracked; M/L/U/D markers and labels are NOT drawn),
+      * a thin state-coloured iris-circle outline + small centre cross per eye,
+      * the anatomical eye word ("Left" / "Right") above the tracked iris.
+
+    Does NOT show: M/L/U/D extents, frame number, timestamp, tracking-state banner, per-eye
+    fc/ic/rc/cov text, raw markers, helper features, debug trace strip, torsion footnote.
+
+    Technical/debug overlay (everything that this function omits) is available via
+    overlay_mode "debug" in run().
+    """
+    ow, oh = int(frame.shape[1] * scale), int(frame.shape[0] * scale)
+    vis = cv2.resize(frame, (ow, oh))
+
+    def _dim(col):
+        """Faint, low-contrast version of a colour — used for the non-selected eye when
+        selected_image_eye is set. Keeps the eye visible in the overlay (for verification)
+        without the bright cyan ring drawing the eye toward the wrong place."""
+        return (max(0, col[0] // 3), max(0, col[1] // 3), max(0, col[2] // 3))
+
+    # Eye-opening contour — cyan when the reference is valid, amber when uncertain. Drawn as a
+    # thin polyline only; no extent diamonds, no labels.
+    for key, contour in (contours or {}).items():
+        if contour is None:
+            continue
+        is_active = (selected_image_eye in (None, "both") or key == selected_image_eye)
+        pts = np.asarray(contour.points, np.int32)
+        pts_s = np.round(pts * scale).astype(np.int32).reshape(-1, 1, 2)
+        col = CYAN if contour.reference_valid else AMBER
+        if not is_active:
+            col = _dim(col)
+        cv2.polylines(vis, [pts_s], isClosed=True, color=col, thickness=1, lineType=cv2.LINE_AA)
+
+    for image_side, tr in (("L", lt), ("R", rt)):
+        if tr.x is None:
+            continue
+        is_active = (selected_image_eye in (None, "both") or image_side == selected_image_eye)
+        col = STATUS_COLOR.get(tr.status, YELLOW)
+        if not is_active:
+            col = _dim(col)
+        p = (int(tr.x * scale), int(tr.y * scale))
+        rad = int((tr.radius or 10) * scale)
+        # Iris circle outline (state-coloured) + small centre cross — the tracked clinical object.
+        # Selected eye gets a thicker outline; non-selected eye uses a thin 1px outline.
+        cv2.circle(vis, p, max(3, rad), col, 2 if is_active else 1, cv2.LINE_AA)
+        cv2.drawMarker(vis, p, col, cv2.MARKER_CROSS, 10, 1, cv2.LINE_AA)
+        # Anatomical label ABOVE the iris. In a front-facing video image_side 'L' = anatomical
+        # 'Right' and image_side 'R' = anatomical 'Left'; mapping lives in patient_eye_label().
+        # The label is drawn brighter on the active eye, dimmer on the inactive eye.
+        word = patient_eye_label(image_side)              # 'Right' / 'Left'
+        pad = max(14, rad + 10)
+        tx, ty = p[0] - 18, max(20, p[1] - pad)
+        text_col = (255, 255, 255) if is_active else (140, 140, 140)
+        cv2.putText(vis, word, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 0, 0), 4, cv2.LINE_AA)
+        cv2.putText(vis, word, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, 0.75, text_col, 1, cv2.LINE_AA)
+    return vis
+
+
 def draw_composite(vis, scale, cft, fm_L, fm_R):
     """Render the V1 clinical anatomy: visible LIMBUS ARC + estimated full iris CIRCLE/ELLIPSE +
     iris-circle centre. Optional CFT helper features (if the engine carries a `.pool`) are drawn as
@@ -609,6 +1124,195 @@ def draw_composite(vis, scale, cft, fm_L, fm_R):
                    f"cov={getattr(fm, 'limbus_arc_coverage', 0):.2f}{occ}")
             cv2.putText(vis, txt, org, cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 3, cv2.LINE_AA)
             cv2.putText(vis, txt, org, cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+    return vis
+
+
+# Arrow vectors per spec §K.4 glyph (image x↑ right, image y↑ down).
+# The detector emits ASCII glyphs because cv2.putText cannot render Unicode arrows on Windows
+# without a custom font; the renderer here turns each glyph into a drawn arrow.
+_ARROW_VECTORS = {
+    "<-":   (-1.0, 0.0),
+    "->":   (+1.0, 0.0),
+    "^":    (0.0, -1.0),
+    "v":    (0.0, +1.0),
+    "/^":   (+0.70, -0.70),
+    "\\^":  (-0.70, -0.70),
+    "/v":   (-0.70, +0.70),   # down-LEFT (looks like / going down)
+    "\\v":  (+0.70, +0.70),   # down-RIGHT
+}
+
+
+def draw_nystagmus_arrow(vis, label: str, glyph: str, n_beats: int = 0,
+                         rate_hz: float = 0.0, confidence: float = 0.0,
+                         analysed_eye: str = ""):
+    """Draw the V1 clinical nystagmus arrow + label band on the overlay. Spec §K.4 / §G.
+
+    Renders into the TOP-LEFT corner of the frame, in a region that does NOT cover the eyes
+    (the source clips zoom over the face; the top-left is consistently free of facial anatomy
+    in the V1 reference clips). The arrow is drawn as a thick coloured shaft + filled arrow head,
+    sized relative to the band, so the direction reads at a glance from across a clinic room."""
+    if not label or glyph not in _ARROW_VECTORS:
+        return vis
+    h, w = vis.shape[:2]
+    band_w = min(380, max(220, int(0.34 * w)))
+    band_h = 86
+    pad = 12
+    x0, y0 = pad, pad
+    x1, y1 = x0 + band_w, y0 + band_h
+
+    # translucent dark panel for legibility, then a bright clinical-red border so the user
+    # cannot miss that the detector flagged something.
+    overlay = vis.copy()
+    cv2.rectangle(overlay, (x0, y0), (x1, y1), (0, 0, 0), -1)
+    cv2.addWeighted(overlay, 0.55, vis, 0.45, 0, vis)
+    cv2.rectangle(vis, (x0, y0), (x1, y1), (40, 40, 220), 2, cv2.LINE_AA)
+
+    # ---- arrow ---------------------------------------------------------------
+    ax_cx, ax_cy = x0 + 42, (y0 + y1) // 2
+    arrow_len = 56
+    dx, dy = _ARROW_VECTORS[glyph]
+    tip = (int(ax_cx + dx * arrow_len / 2), int(ax_cy + dy * arrow_len / 2))
+    tail = (int(ax_cx - dx * arrow_len / 2), int(ax_cy - dy * arrow_len / 2))
+    cv2.arrowedLine(vis, tail, tip, (255, 255, 255), 6, cv2.LINE_AA, tipLength=0.45)
+    cv2.arrowedLine(vis, tail, tip, (40, 40, 220), 3, cv2.LINE_AA, tipLength=0.45)
+
+    # ---- text ---------------------------------------------------------------
+    title = label
+    tx = x0 + 90
+    cv2.putText(vis, title, (tx, y0 + 32),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.62, (0, 0, 0), 3, cv2.LINE_AA)
+    cv2.putText(vis, title, (tx, y0 + 32),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.62, (255, 255, 255), 1, cv2.LINE_AA)
+    sub = []
+    if analysed_eye:
+        sub.append(f"eye: {analysed_eye}")
+    if n_beats:
+        sub.append(f"{n_beats} beats")
+    if rate_hz:
+        sub.append(f"{rate_hz:.1f} Hz")
+    if confidence:
+        sub.append(f"conf {confidence:.2f}")
+    if sub:
+        sub_txt = "   ".join(sub)
+        cv2.putText(vis, sub_txt, (tx, y0 + 60),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 0, 0), 2, cv2.LINE_AA)
+        cv2.putText(vis, sub_txt, (tx, y0 + 60),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, (230, 230, 230), 1, cv2.LINE_AA)
+    # torsion note — always shown on the band (spec §K.5)
+    cv2.putText(vis, "Torsion: not assessed", (tx, y0 + 78),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.36, (0, 0, 0), 2, cv2.LINE_AA)
+    cv2.putText(vis, "Torsion: not assessed", (tx, y0 + 78),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.36, (180, 180, 180), 1, cv2.LINE_AA)
+    return vis
+
+
+def _short_direction_label(beating_direction: str) -> str:
+    """One-line clinical status text for the clinical overlay. The user-facing words are restricted
+    to the V1 set: Left-beating / Right-beating / Up-beating / Down-beating / Oblique."""
+    if not beating_direction or beating_direction == "none":
+        return "No nystagmus detected"
+    mapping = {
+        "left":  "Nystagmus detected: Left-beating",
+        "right": "Nystagmus detected: Right-beating",
+        "up":    "Nystagmus detected: Up-beating",
+        "down":  "Nystagmus detected: Down-beating",
+    }
+    if beating_direction in mapping:
+        return mapping[beating_direction]
+    if beating_direction.startswith("oblique"):
+        return "Nystagmus detected: Oblique"
+    return "No nystagmus detected"
+
+
+def _safe_text_region(vis, iris_pts):
+    """Pick a placement strategy for the clinical status text that stays well clear of the eyes.
+    Returns ('top'|'bottom', y_band_centre). Strategy: if the average iris-y is in the LOWER half
+    of the frame, place text in the FOREHEAD region (top). Otherwise place text BELOW the cheek
+    region (bottom). The chosen y is centred in a band that is at least 60 px away from the iris
+    line — so the text cannot reach the eyes."""
+    h, w = vis.shape[:2]
+    ys = [int(round(p[1])) for p in iris_pts if p is not None and p[1] is not None]
+    if not ys:
+        return "top", max(34, int(0.10 * h))
+    eye_y = int(np.mean(ys))
+    # if eyes are in the bottom half → forehead (top band); else lower face (bottom band)
+    if eye_y >= h // 2:
+        return "top", max(34, int(0.10 * h))
+    # bottom band — guarantee a 60 px buffer below the lowest eye
+    bottom_y = min(h - 30, max(eye_y + 60, int(0.82 * h)))
+    return "bottom", bottom_y
+
+
+def draw_clinical_status_band(vis, status_text: str, glyph: str = "",
+                              iris_pts=None):
+    """Render the V1 clinical status text + optional arrow in a SAFE region of the frame
+    (forehead or below the lower face), NEVER on or near the eyes.
+
+    The band carries:
+      * the single clinical status line (no debug text, no frame/time, no torsion footnote)
+      * an arrow shaped to match the detected beating direction (or no arrow if 'No nystagmus
+        detected'). For 'Oblique' the arrow points at 45° in the direction the resultant
+        favoured, taken from the glyph passed in.
+    """
+    h, w = vis.shape[:2]
+    side, y_centre = _safe_text_region(vis, iris_pts or [])
+    band_h = 78
+    if side == "top":
+        y0 = max(8, y_centre - band_h // 2)
+    else:
+        y0 = min(h - band_h - 8, y_centre - band_h // 2)
+    y1 = y0 + band_h
+    band_w = min(720, max(360, int(0.62 * w)))
+    x0 = (w - band_w) // 2
+    x1 = x0 + band_w
+
+    # translucent dark panel for legibility; bright clinical-red border when nystagmus detected
+    overlay = vis.copy()
+    cv2.rectangle(overlay, (x0, y0), (x1, y1), (0, 0, 0), -1)
+    cv2.addWeighted(overlay, 0.55, vis, 0.45, 0, vis)
+    border_col = (40, 40, 220) if status_text.startswith("Nystagmus detected") else (160, 160, 160)
+    cv2.rectangle(vis, (x0, y0), (x1, y1), border_col, 2, cv2.LINE_AA)
+
+    # ---- arrow (only when nystagmus is detected) -----------------------------
+    text_x_start = x0 + 24
+    if glyph in _ARROW_VECTORS and status_text.startswith("Nystagmus detected"):
+        ax_cx, ax_cy = x0 + 50, (y0 + y1) // 2
+        L = 56
+        dx, dy = _ARROW_VECTORS[glyph]
+        tip = (int(ax_cx + dx * L / 2), int(ax_cy + dy * L / 2))
+        tail = (int(ax_cx - dx * L / 2), int(ax_cy - dy * L / 2))
+        cv2.arrowedLine(vis, tail, tip, (255, 255, 255), 6, cv2.LINE_AA, tipLength=0.45)
+        cv2.arrowedLine(vis, tail, tip, border_col, 3, cv2.LINE_AA, tipLength=0.45)
+        text_x_start = x0 + 104
+
+    # ---- single status line --------------------------------------------------
+    ty = y0 + band_h // 2 + 8
+    cv2.putText(vis, status_text, (text_x_start, ty),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.78, (0, 0, 0), 4, cv2.LINE_AA)
+    cv2.putText(vis, status_text, (text_x_start, ty),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.78, (255, 255, 255), 1, cv2.LINE_AA)
+    return vis
+
+
+def draw_no_nystagmus_caption(vis, analysed_eye: str = ""):
+    """Small unobtrusive caption when the detector saw no nystagmus this frame (spec §G).
+    Drawn in the TOP-LEFT corner so it never covers the eyes."""
+    h, w = vis.shape[:2]
+    txt = "No nystagmus detected"
+    pad = 12
+    cv2.putText(vis, txt, (pad, pad + 18),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.50, (0, 0, 0), 3, cv2.LINE_AA)
+    cv2.putText(vis, txt, (pad, pad + 18),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.50, (200, 200, 200), 1, cv2.LINE_AA)
+    cv2.putText(vis, "Torsion: not assessed", (pad, pad + 38),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.38, (0, 0, 0), 2, cv2.LINE_AA)
+    cv2.putText(vis, "Torsion: not assessed", (pad, pad + 38),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.38, (160, 160, 160), 1, cv2.LINE_AA)
+    if analysed_eye:
+        cv2.putText(vis, f"eye: {analysed_eye}", (pad, pad + 56),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.38, (0, 0, 0), 2, cv2.LINE_AA)
+        cv2.putText(vis, f"eye: {analysed_eye}", (pad, pad + 56),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.38, (160, 160, 160), 1, cv2.LINE_AA)
     return vis
 
 
@@ -1023,7 +1727,8 @@ def apply_landmark_calibration(proposal, calib=None):
 
 
 def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adaptive", show_raw=True,
-        eye="auto", engine="v1", no_mediapipe=False, cft_helper=False):
+        eye="auto", engine="v1", no_mediapipe=False, cft_helper=False,
+        overlay_mode="clinical"):
     video_path = Path(video_path)
     out_dir = Path(output_dir) / (video_path.stem + "_tracked")
 
@@ -1033,16 +1738,95 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
         raise SystemExit(
             'Stage 0 not complete — landmarks not approved. Approve first:\n'
             f'    python app.py --video "{video_path}" --approve')
+
+    # ---- V1 SCHEMA GATE (locked 2026-06-27) ------------------------------------
+    # Locked V1 rule:
+    #   No valid iris/limbus approval + no valid eye-opening/orbital margin contour approval
+    #   = no V1 analysis.
+    #
+    # Required top-level fields:
+    #   * approval_schema_version == "v1_iris_limbus_and_eye_contour"
+    #   * tracking_target == "iris_limbus"
+    #   * reference_target == "eye_opening_contour"
+    #   * iris_limbus_approved == True
+    #   * eye_opening_contour_approved == True
+    #   * legacy_pupil_fallback_used == False
+    #   * legacy_four_point_contour_fallback_used == False
+    #   * eye_opening_contours dict (with at least one usable eye's polygon)
+    #
+    # Required per-eye fields under "eyes" (preferred) or legacy "per_eye_validity":
+    #   * usable_for_v1, iris_limbus_approved, eye_opening_contour_approved
+    #
+    # Failure here writes a TOMBSTONE nystagmus_events.json with analysis_valid=false /
+    # invalid_stage0_approval. No tracker is constructed. No detector runs. No overlay video
+    # is produced. The clinician sees the rejection reason and is asked to re-approve.
+    schema = approved.get("approval_schema_version")
+    eyes_block = approved.get("eyes") or approved.get("per_eye_validity") or {}
+    reasons = []
+    if schema != "v1_iris_limbus_and_eye_contour":
+        reasons.append(f"approval_schema_version is {schema!r} (expected "
+                       f"'v1_iris_limbus_and_eye_contour')")
+    if approved.get("tracking_target") not in (None, "iris_limbus"):
+        reasons.append(f"tracking_target is {approved.get('tracking_target')!r} "
+                       f"(expected 'iris_limbus')")
+    if approved.get("reference_target") not in (None, "eye_opening_contour"):
+        reasons.append(f"reference_target is {approved.get('reference_target')!r} "
+                       f"(expected 'eye_opening_contour')")
+    if not approved.get("iris_limbus_approved"):
+        reasons.append("iris_limbus_approved is missing or false")
+    if not approved.get("eye_opening_contour_approved"):
+        reasons.append("eye_opening_contour_approved is missing or false")
+    if approved.get("legacy_pupil_fallback_used"):
+        reasons.append("legacy_pupil_fallback_used is true (pupil approval is not valid for V1)")
+    if approved.get("legacy_four_point_contour_fallback_used"):
+        reasons.append("legacy_four_point_contour_fallback_used is true "
+                       "(four face landmarks are not a valid contour for V1)")
+    if not approved.get("eye_opening_contours"):
+        reasons.append("eye_opening_contours block is missing")
+    # at least one eye must be explicitly usable_for_v1 with both flags
+    any_eye_usable_for_v1 = False
+    for ek in ("L", "R"):
+        e = eyes_block.get(ek)
+        if isinstance(e, dict) and e.get("usable_for_v1") and \
+                e.get("iris_limbus_approved") and e.get("eye_opening_contour_approved"):
+            any_eye_usable_for_v1 = True
+            break
+    if not any_eye_usable_for_v1:
+        reasons.append("no eye has usable_for_v1 + iris_limbus_approved + "
+                       "eye_opening_contour_approved all true")
+
+    if reasons:
+        _write_invalid_stage0_outputs(out_dir, approved, reasons=reasons)
+        raise SystemExit(
+            "Invalid Stage 0 approval for eye_vng V1. V1 requires full iris/limbus approval "
+            "and eye-opening/orbital margin contour approval. This approval file appears to "
+            "be legacy or incomplete. Please rerun --approve and mark the full iris/limbus "
+            "circle and eye-opening contour.\n"
+            "Failures:\n" + "\n".join("  - " + r for r in reasons) + "\n"
+            f'Approve first:  python app.py --video "{video_path}" --approve')
+
     init_fr = int(approved["init_frame_number"])
-    # backward-compat: approvals made before the pupil→iris rename store the eyes under "pupils".
-    # The seed radius here is unused for the CFT anyway (run() re-derives the iris radius from
-    # MediaPipe below), so an old pupil-radius approval still drives the composite tracker correctly.
-    iris_appr = approved.get("iris") or approved.get("pupils") or {}
+    # Schema gate above forbids legacy fields, so reading the V1 "iris" block is now the only path.
+    iris_appr = approved.get("iris") or {}
     Lp, Rp = iris_appr.get("L"), iris_appr.get("R")
     L = (Lp["x"], Lp["y"], Lp["radius"]) if Lp else None
     R = (Rp["x"], Rp["y"], Rp["radius"]) if Rp else None
     if not L and not R:
         raise SystemExit("Approved landmarks contain no usable eye.")
+    # Per-eye usable_for_v1 — if an eye is marked unusable for V1, skip it even if a seed
+    # exists. Both flags (iris_limbus_approved AND eye_opening_contour_approved) must hold.
+    for ek in ("L", "R"):
+        e = eyes_block.get(ek)
+        if not isinstance(e, dict):
+            continue
+        if not (e.get("usable_for_v1") and e.get("iris_limbus_approved")
+                and e.get("eye_opening_contour_approved")):
+            if ek == "L":
+                L = None
+            else:
+                R = None
+    if not L and not R:
+        raise SystemExit("Approved landmarks contain no usable eye after V1 validity check.")
     confirmed = {"L": L, "R": R}
     interocular = abs(R[0] - L[0]) if (L and R) else (L or R)[2] * 6.0
     print(f"Tracking from approved_landmarks.json (init frame {init_fr}).")
@@ -1070,18 +1854,37 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
         if pts is not None and len(pts) >= 6:
             contour_trackers[side] = EyeOpeningContourTracker(side, pts, init_gray)
             contour_states[side] = contour_trackers[side].state
-    # IRIS template size: the tracked object is the whole iris, so size the template to the IRIS radius
-    # (from MediaPipe at the init frame), not the small iris — picked per eye by nearest iris centre.
-    _, le0, re0 = detector.detect(init_frame) if (detector and ok) else (False, None, None)
-    def _iris_r(center, fallback):
-        cands = [(o.single_x, o.single_y, o.iris_radius) for o in (le0, re0)
-                 if o and o.detected and o.iris_radius]
-        if not cands or center is None:
-            return float(fallback or 12.0)
-        cx, cy = center
-        return float(min(cands, key=lambda c: (c[0] - cx) ** 2 + (c[1] - cy) ** 2)[2])
-    lr = _iris_r((L[0], L[1]) if L else None, L[2] if L else None)
-    rr = _iris_r((R[0], R[1]) if R else None, R[2] if R else None)
+    # IRIS RADIUS — STAGE-0 ONLY (clinician decision 2026-06-28).
+    # MediaPipe has been REMOVED from the V1 clinical tracking path. MediaPipe's
+    # iris-landmark radius (~44 px on this 1920x1080 clip) is not the clinical
+    # limbus radius (~88 px); using it seeded V1 with the wrong radius and made
+    # the tracker lock onto pupil-sized structures. V1 now reads the iris/limbus
+    # radius DIRECTLY from the Stage-0 clinician-approved JSON; no detector call,
+    # no fallback to MediaPipe. If Stage-0 radius is missing or invalid, V1
+    # refuses to run.
+    def _stage0_radius_or_refuse(stage0_iris, eye_label: str) -> float:
+        if not stage0_iris:
+            print(f"[V1-radius] ERROR: missing Stage-0 iris/limbus radius for eye "
+                  f"{eye_label}. Refusing V1 tracking.")
+            raise SystemExit(
+                f"V1 refuses to run: Stage-0 iris/limbus radius for eye {eye_label} "
+                "is missing. Re-approve Stage 0 before tracking."
+            )
+        r = float(stage0_iris[2] or 0.0)
+        if not (r > 0):
+            print(f"[V1-radius] ERROR: invalid Stage-0 iris/limbus radius (r={r}) "
+                  f"for eye {eye_label}. Refusing V1 tracking.")
+            raise SystemExit(
+                f"V1 refuses to run: Stage-0 iris/limbus radius for eye {eye_label} "
+                "is invalid. Re-approve Stage 0 before tracking."
+            )
+        return r
+    lr = _stage0_radius_or_refuse(L, "L") if L else 0.0
+    rr = _stage0_radius_or_refuse(R, "R") if R else 0.0
+    if L:
+        print(f"[V1-radius] L used={lr:.2f} source=stage0")
+    if R:
+        print(f"[V1-radius] R used={rr:.2f} source=stage0")
     # ENGINE SELECTION (V1 hierarchy: limbus = primary, contour = reference, CFT = optional helper).
     # Default = "v1" — the V1Tracker orchestrator (limbus fit + eye-opening contour, CFT only when
     # cft_helper=True). "composite" = the standalone CompositeFeatureTracker (CFT-first; kept for
@@ -1095,6 +1898,48 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
             cft["L"] = CompositeFeatureTracker("L", (L[0], L[1]), lr, init_gray, init_fr)
         if R:
             cft["R"] = CompositeFeatureTracker("R", (R[0], R[1]), rr, init_gray, init_fr)
+    elif engine == "anatomical":
+        # Anatomically-constrained iris–sclera boundary tracker (TRACKER_REDESIGN.md).
+        # Stage-0 contour polygons are the containment box; rescue anchors from
+        # teaching_anchors.json (if present) become absolute truth on their frames.
+        from src.core.iris_anatomical_tracker import AnatomicalTracker
+        approved_contours = (approved.get("eye_opening_contours") or {})
+        # Rescue anchors are loaded once; the tracker filters by image_side_eye.
+        try:
+            import json as _json
+            ta_path = out_dir / "teaching_anchors.json"
+            anchors_blob = _json.loads(ta_path.read_text(encoding="utf-8")) if ta_path.exists() else {}
+            anchors_list = anchors_blob.get("anchors", []) if isinstance(anchors_blob, dict) else []
+        except Exception:
+            anchors_list = []
+        if anchors_list:
+            print(f"[anatomical] loaded {len(anchors_list)} rescue anchors from teaching_anchors.json")
+
+        def _build(eye_key, seed_xy, seed_r):
+            tr = AnatomicalTracker(eye_key, seed_xy, seed_r, init_gray, init_fr)
+            # The Stage-0 schema stores the contour as a LIST of {x,y} points directly
+            # under each eye key (verified 2026-06-28 on the approved vestibular-neuritis
+            # clip). Some older approvals may instead store {"points": [...]} — accept both.
+            entry = approved_contours.get(eye_key)
+            if isinstance(entry, dict):
+                pts = entry.get("points")
+            elif isinstance(entry, list):
+                pts = entry
+            else:
+                pts = None
+            if not pts:
+                raise SystemExit(
+                    f"[anatomical-engine] Stage 0 missing eye-opening contour for eye {eye_key}.\n"
+                    f"Run: python app.py --video \"{video_path}\" --approve\n"
+                    "The anatomical engine requires an approved eye-opening contour per eye."
+                )
+            tr.set_contour(pts)
+            tr.set_anchors(anchors_list)
+            return tr
+        if L:
+            cft["L"] = _build("L", (L[0], L[1]), lr)
+        if R:
+            cft["R"] = _build("R", (R[0], R[1]), rr)
     else:  # engine == "v1"
         if L:
             cft["L"] = V1Tracker("L", (L[0], L[1]), lr, init_gray, init_fr,
@@ -1103,6 +1948,181 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
             cft["R"] = V1Tracker("R", (R[0], R[1]), rr, init_gray, init_fr,
                                   use_cft_helper=cft_helper)
     print(f"Tracking engine: {engine}{' (+CFT helper)' if (engine == 'v1' and cft_helper) else ''}")
+
+    # ---- V1 post-tracking plausibility filter (clinician reset 2026-06-28) ----
+    # Keeps the working V1 tracker as-is and adds only minimal anatomical
+    # guardrails on its per-frame output. Lenient by design: rejects only when a
+    # result is anatomically impossible (centre clearly outside the Stage-0
+    # contour, OR radius wildly off Stage-0). Marks the FrameMeasurement as
+    # failed; does NOT touch V1's internal last_good / prior. The earlier
+    # over-engineered anatomical engine is now opt-in (--engine anatomical) and
+    # not part of the clinical workflow.
+    plausibility_polys: dict = {}
+    plausibility_stage0_r: dict = {}
+    PLAUSIBILITY_OUTSIDE_TOL_PX = 20.0   # centre allowed up to 20 px outside contour
+    PLAUSIBILITY_R_LO = 0.50             # reject if r < 50 % of Stage-0
+    PLAUSIBILITY_R_HI = 2.00             # reject if r > 200 % of Stage-0
+    # ------------ orbit guardrail discrimination (clinician spec 2026-06-29) ----
+    # When the iris is outside the static Stage-0 oval, distinguish between:
+    #   * tracker drift onto cheek/eyebrow/nose (clinically invalid), and
+    #   * the iris is still being tracked correctly but the head has moved, so the
+    #     static Stage-0 oval is anatomically stale relative to the current head
+    #     pose (clinically VALID; we just record that the oval is stale).
+    # Heuristic:
+    #   1. Maintain a short history of recent VALID iris centres per eye.
+    #   2. When a frame is outside the contour, compute the expected position by
+    #      extrapolating the median per-frame iris motion from the history.
+    #   3. If the current centre is within MOTION_EXPECTED_TOL_PX of that
+    #      expected position AND the radius is still within the radius band,
+    #      the iris is moving smoothly with the head -> 'good_iris_but_static_orbit_stale'.
+    #   4. Otherwise -> 'tracker_drift_outside_orbit'.
+    ORBIT_MOTION_HISTORY = 5
+    ORBIT_MOTION_EXPECTED_TOL_PX = 30.0
+    iris_history: dict = {"L": [], "R": []}    # [(frame_no, cx, cy, r), ...]
+    if engine == "v1":
+        _v1_contours_src = (approved.get("eye_opening_contours") or {})
+        _v1_iris_src = (approved.get("iris") or {})
+        for _ek in ("L", "R"):
+            _entry = _v1_contours_src.get(_ek)
+            _pts = _entry.get("points") if isinstance(_entry, dict) else (_entry if isinstance(_entry, list) else None)
+            if _pts:
+                try:
+                    plausibility_polys[_ek] = np.array(
+                        [[float(p["x"]), float(p["y"])] for p in _pts],
+                        np.float32).reshape(-1, 1, 2)
+                except Exception:
+                    plausibility_polys[_ek] = None
+            _iris_ent = _v1_iris_src.get(_ek) or {}
+            try:
+                plausibility_stage0_r[_ek] = float(_iris_ent.get("radius") or 0.0)
+            except Exception:
+                plausibility_stage0_r[_ek] = 0.0
+        _n_polys = sum(1 for v in plausibility_polys.values() if v is not None)
+        print(f"[v1-plausibility] enabled with {_n_polys} eye contour(s); "
+              f"outside_tol={PLAUSIBILITY_OUTSIDE_TOL_PX:.0f}px, "
+              f"radius_band=[{PLAUSIBILITY_R_LO:.2f},{PLAUSIBILITY_R_HI:.2f}] x Stage-0")
+
+    def _v1_plausibility_check(fm, eye_key: str):
+        """Lenient anatomical check on a V1 FrameMeasurement.
+        Returns (ok, reason). ok=True → leave alone. ok=False → caller marks
+        the FM as failed without touching V1 state."""
+        if eye_key not in plausibility_polys or plausibility_polys[eye_key] is None:
+            return True, ""
+        if fm.iris_centre is None or fm.iris_radius is None:
+            return True, ""
+        cx, cy = float(fm.iris_centre[0]), float(fm.iris_centre[1])
+        r = float(fm.iris_radius)
+        # 1. Containment: signed distance to polygon (+inside, -outside, |.|=px).
+        dist_to_poly = cv2.pointPolygonTest(plausibility_polys[eye_key], (cx, cy), True)
+        if dist_to_poly < -PLAUSIBILITY_OUTSIDE_TOL_PX:
+            return False, f"outside_contour({-dist_to_poly:.0f}px)"
+        # 2. Radius sanity vs Stage-0.
+        r_st0 = plausibility_stage0_r.get(eye_key, 0.0)
+        if r_st0 > 0:
+            if r < PLAUSIBILITY_R_LO * r_st0:
+                return False, f"radius_too_small(r={r:.0f}<{PLAUSIBILITY_R_LO*r_st0:.0f})"
+            if r > PLAUSIBILITY_R_HI * r_st0:
+                return False, f"radius_too_large(r={r:.0f}>{PLAUSIBILITY_R_HI*r_st0:.0f})"
+        return True, ""
+
+    def _classify_orbit_outside(fm, eye_key: str, frame_no: int) -> str:
+        """When the iris centre is outside the static Stage-0 contour, decide
+        whether this is tracker drift or just a stale static contour because the
+        head moved. Returns one of:
+            'tracker_drift_outside_orbit'
+            'good_iris_but_static_orbit_stale'
+        """
+        hist = iris_history.get(eye_key) or []
+        if len(hist) < 2:
+            # No motion baseline yet: be conservative and call it drift.
+            return "tracker_drift_outside_orbit"
+        cx, cy = float(fm.iris_centre[0]), float(fm.iris_centre[1])
+        r = float(fm.iris_radius)
+        # Radius must still be plausible to claim 'good iris'.
+        r_st0 = plausibility_stage0_r.get(eye_key, 0.0)
+        if r_st0 > 0 and not (PLAUSIBILITY_R_LO * r_st0 <= r <= PLAUSIBILITY_R_HI * r_st0):
+            return "tracker_drift_outside_orbit"
+        # Per-frame median motion from the history (excluding very stale samples).
+        dxs, dys = [], []
+        for i in range(1, len(hist)):
+            (f0, x0, y0, _), (f1, x1, y1, _) = hist[i - 1], hist[i]
+            df = max(1, f1 - f0)
+            dxs.append((x1 - x0) / df)
+            dys.append((y1 - y0) / df)
+        mdx = float(np.median(dxs)) if dxs else 0.0
+        mdy = float(np.median(dys)) if dys else 0.0
+        # Project last valid centre forward to current frame.
+        last_f, last_x, last_y, _ = hist[-1]
+        steps = frame_no - last_f
+        exp_x = last_x + mdx * steps
+        exp_y = last_y + mdy * steps
+        dist_to_expected = float(np.hypot(cx - exp_x, cy - exp_y))
+        if dist_to_expected <= ORBIT_MOTION_EXPECTED_TOL_PX:
+            return "good_iris_but_static_orbit_stale"
+        return "tracker_drift_outside_orbit"
+
+    def _update_iris_history(fm, eye_key: str, frame_no: int) -> None:
+        """Append the current (valid) iris centre to the per-eye history buffer."""
+        if fm.iris_centre is None or fm.iris_radius is None:
+            return
+        if not fm.iris_valid:
+            return
+        cx, cy = float(fm.iris_centre[0]), float(fm.iris_centre[1])
+        r = float(fm.iris_radius)
+        buf = iris_history.setdefault(eye_key, [])
+        buf.append((int(frame_no), cx, cy, r))
+        if len(buf) > ORBIT_MOTION_HISTORY:
+            del buf[0]
+
+    def _apply_v1_plausibility(fm, eye_key: str, frame_no: int):
+        """If the FM fails the plausibility check, mark it as a gap (iris_valid
+        False, drift flag set) and log once. V1's internal state is untouched.
+
+        2026-06-29 — orbit-guardrail discrimination (on by default for V1):
+        When the failure is 'outside_contour', we further classify whether the
+        iris is genuinely drifting onto face / cheek / brow ('tracker_drift_
+        outside_orbit') OR the iris is still being tracked correctly but the
+        static Stage-0 oval has gone stale because the head moved
+        ('good_iris_but_static_orbit_stale'). In the stale-oval case we KEEP
+        iris_valid=True so downstream nystagmus analysis still trusts the frame;
+        we only tag drift_reason for transparency.
+        """
+        ok, reason = _v1_plausibility_check(fm, eye_key)
+        if ok:
+            # Frame is inside the static oval AND radius is sane: just record
+            # the iris in the motion history for future discrimination calls.
+            fm.drift_reason = ""           # keep as-is — leave existing benign reason
+            _update_iris_history(fm, eye_key, frame_no)
+            return
+        # Failed the basic check. Pull apart by reason.
+        if reason.startswith("outside_contour"):
+            cls = _classify_orbit_outside(fm, eye_key, frame_no)
+            if cls == "good_iris_but_static_orbit_stale":
+                # Keep clinically valid; record an honest reason so the CSV /
+                # downstream tools can see what happened.
+                fm.drift_reason = f"orbit_status:good_iris_but_static_orbit_stale|{reason}"
+                _update_iris_history(fm, eye_key, frame_no)
+                print(f"[v1-orbit-guardrail][{eye_key}] fr={frame_no} "
+                      f"orbit_status=good_iris_but_static_orbit_stale ({reason})")
+                return
+            # cls == 'tracker_drift_outside_orbit'
+            print(f"[v1-orbit-guardrail][{eye_key}] fr={frame_no} "
+                  f"orbit_status=tracker_drift_outside_orbit ({reason})")
+            fm.iris_valid = False
+            fm.drift_flag = True
+            fm.drift_reason = f"orbit_status:tracker_drift_outside_orbit|{reason}"
+            return
+        # Radius-based or any other plausibility failure: keep the original behaviour.
+        print(f"[v1-plausibility][{eye_key}] fr={frame_no} reject={reason}")
+        fm.iris_valid = False
+        fm.drift_flag = True
+        fm.drift_reason = f"plausibility:{reason}"
+        # Leave iris_centre / iris_radius as V1 produced them so the overlay can
+        # render a dimmed/red "needs rescue" marker if it chooses. The validity
+        # property (state in VALID_STATES AND iris_centre not None) will still
+        # report 'valid' on its own, but downstream consumers gate on iris_valid
+        # and drift_flag — see segments.py + CSV writer.
+
     face_appr = approved.get("face_landmarks") or {}
     init_face_mp = (detector.face_landmarks(init_frame) or {}) if (detector and face_appr and ok) else {}
     face_tracker = FaceLandmarkTracker(face_appr, init_face_mp) if (face_appr and detector) else None
@@ -1114,13 +2134,21 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
     print(f"Filter: {filter_mode}")
     scale = min(1.0, OVERLAY_MAX_W / width)
     ow, oh = int(width * scale), int(height * scale)
-    # The trace goes in a dedicated strip BELOW the video (extended canvas), NEVER over the video
-    # pixels — so it can never cover the eyes. (These clips zoom/pan over the eyes, so any on-video
-    # overlay would eventually land on them.) The strip is synced to playback; eyes stay fully visible.
-    band_h = max(170, int(0.34 * oh))
-    out_h = oh + band_h
+    # CLINICAL overlay mode (default): the output canvas IS the video — minimal labels only,
+    # nothing else. DEBUG overlay mode: extend the canvas downward with a dedicated trace strip
+    # below the video (eyes never covered) and render contour/limbus/state banner on the video.
+    if overlay_mode == "debug":
+        band_h = max(170, int(0.34 * oh))
+        out_h = oh + band_h
+    else:
+        band_h = 0
+        out_h = oh
     writer = cv2.VideoWriter(str(out_dir / "tracking_overlay.mp4"),
                              cv2.VideoWriter_fourcc(*"mp4v"), fps, (ow, out_h))
+    print(f"Overlay mode: {overlay_mode}")
+    # iris (x,y) per frame in OVERLAY-PIXEL coords — used by the clinical pass-2 annotator to
+    # choose forehead vs lower-face placement so the status band never sits on the eyes.
+    iris_xy_per_frame_overlay = []
 
     csv_f = (out_dir / "tracking.csv").open("w", newline="", encoding="utf-8")
     cw = csv.writer(csv_f)
@@ -1274,6 +2302,10 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
                 fm_L = cft["L"].step(gray, fr, tms, t, le_mp.ear if le_mp.detected else None,
                                       aperture=_aperture_by_eye("L"), mp_iris=_mpiris(le_mp), bgr=frame,
                                       reference_state=ref_state, reference_confidence=ref_conf)
+                # V1 plausibility filter — only fires for engine=="v1"; for other
+                # engines plausibility_polys is empty and the check returns True.
+                if engine == "v1":
+                    _apply_v1_plausibility(fm_L, "L", fr)
                 lt = fm_to_track(fm_L)
             else:
                 lt = Track("lost", None, None)
@@ -1282,6 +2314,8 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
                 fm_R = cft["R"].step(gray, fr, tms, t, re_mp.ear if re_mp.detected else None,
                                       aperture=_aperture_by_eye("R"), mp_iris=_mpiris(re_mp), bgr=frame,
                                       reference_state=ref_state, reference_confidence=ref_conf)
+                if engine == "v1":
+                    _apply_v1_plausibility(fm_R, "R", fr)
                 rt = fm_to_track(fm_R)
             else:
                 rt = Track("lost", None, None)
@@ -1415,42 +2449,62 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
         if not show_both and chosen_eye is None and max(valid_L, valid_R) >= 25:
             chosen_eye = "L" if valid_L >= valid_R else "R"   # lock to the better-tracked eye
 
-        vis = draw_overlay(frame, scale, lt, rt, fstatus, fr, t, None,
-                           contours=contour_states)
-        # composite features (spec §G overlay): green = trusted, amber = probation, red = lost/suspect.
-        # Plus a per-eye state + frame_confidence banner. Drawn for every enabled eye.
-        draw_composite(vis, scale, cft or {}, fm_L, fm_R)
-        if show_both:
-            # Clinical labels: anatomical patient eye on each side of the image
-            # (front-facing video → image L = patient Right, image R = patient Left).
-            chans = [("Contour-local H  (iris-circle centre / eye-opening contour)   "
-                      "green = Right   blue = Left",
-                      [(cor_lh, GREEN), (cor_rh, BLUE)]),
-                     ("Contour-local V  (iris-circle centre / eye-opening contour)   "
-                      "green = Right   blue = Left",
-                      [(cor_lv, GREEN), (cor_rv, BLUE)])]
+        if overlay_mode == "debug":
+            vis = draw_overlay(frame, scale, lt, rt, fstatus, fr, t, None,
+                               contours=contour_states)
+            # debug-only: composite features + per-eye state + frame_confidence banner.
+            draw_composite(vis, scale, cft or {}, fm_L, fm_R)
+            if show_both:
+                # Clinical labels: anatomical patient eye on each side of the image
+                # (front-facing video → image L = patient Right, image R = patient Left).
+                chans = [("Contour-local H  (iris-circle centre / eye-opening contour)   "
+                          "green = Right   blue = Left",
+                          [(cor_lh, GREEN), (cor_rh, BLUE)]),
+                         ("Contour-local V  (iris-circle centre / eye-opening contour)   "
+                          "green = Right   blue = Left",
+                          [(cor_lv, GREEN), (cor_rv, BLUE)])]
+            else:
+                e = chosen_eye or ("R" if valid_R >= valid_L else "L")
+                col = GREEN if e == "L" else BLUE
+                side = patient_eye_label(e)                      # 'Left' / 'Right'
+                chans = [(f"Contour-local H  (iris-circle centre / contour)   Selected eye: {side}",
+                          [(cor_lh if e == "L" else cor_rh, col)]),
+                         (f"Contour-local V  (iris-circle centre / contour)   Selected eye: {side}",
+                          [(cor_lv if e == "L" else cor_rv, col)])]
+            canvas = np.zeros((out_h, ow, 3), np.uint8)
+            canvas[:oh] = vis
+            cv2.line(canvas, (0, oh), (ow, oh), (60, 60, 60), 1)
+            superimpose_traces(canvas, times, chans, t, oh)
+            writer.write(canvas)
         else:
-            e = chosen_eye or ("R" if valid_R >= valid_L else "L")
-            col = GREEN if e == "L" else BLUE
-            side = patient_eye_label(e)                      # 'Left' / 'Right'
-            chans = [(f"Contour-local H  (iris-circle centre / contour)   Selected eye: {side}",
-                      [(cor_lh if e == "L" else cor_rh, col)]),
-                     (f"Contour-local V  (iris-circle centre / contour)   Selected eye: {side}",
-                      [(cor_lv if e == "L" else cor_rv, col)])]
-        canvas = np.zeros((out_h, ow, 3), np.uint8)   # video on top, trace strip below (eyes never covered)
-        canvas[:oh] = vis
-        cv2.line(canvas, (0, oh), (ow, oh), (60, 60, 60), 1)
-        superimpose_traces(canvas, times, chans, t, oh)
-        writer.write(canvas)
+            # CLINICAL overlay mode (default): video + thin eye-opening contour outline +
+            # state-coloured iris-circle + small centre cross + 'Left'/'Right' anatomical labels.
+            # Everything else (M/L/U/D extents, frame number, timestamp, state banner, fc/ic/rc/cov,
+            # trace strip, "Torsion: not assessed" footnote) is excluded by design — debug mode only.
+            # Pass `chosen_eye` so the better-tracked eye is drawn brightly and the other eye
+            # is dimmed. During warm-up (before chosen_eye locks) both eyes look equal — that
+            # only lasts a fraction of a second on most clips. `forced` (from --eye L|R) wins.
+            sel_for_render = forced or chosen_eye
+            canvas = draw_clinical_overlay(frame, scale, lt, rt,
+                                           selected_image_eye=sel_for_render,
+                                           contours=contour_states)
+            writer.write(canvas)
+        # Cache the tracked iris (x,y) in OVERLAY-pixel coords for the clinical pass-2 annotator.
+        pts_this_frame = []
+        for tr in (lt, rt):
+            if tr.x is not None:
+                pts_this_frame.append((int(tr.x * scale), int(tr.y * scale)))
+        iris_xy_per_frame_overlay.append(pts_this_frame)
+        # Debug frame saves use the same canvas the overlay writer received this iteration.
         if fstatus in ("uncertain", "blink_or_occluded", "lost") and fr >= init_fr:
             seen_bad += 1
             if seen_bad % stride == 0 and saved_bad < max_debug_frames:
-                cv2.imwrite(str(dbg_dir / f"{fr:06d}_{fstatus}.png"), vis)
+                cv2.imwrite(str(dbg_dir / f"{fr:06d}_{fstatus}.png"), canvas)
                 saved_bad += 1
         # save a debug frame whenever a drift guard fired (visual proof of where the marker sat)
         drift_reason = st_L or st_R
         if drift_reason and fr >= init_fr and saved_drift < max_debug_frames:
-            cv2.imwrite(str(dbg_dir / f"{fr:06d}_{drift_reason}.png"), vis)
+            cv2.imwrite(str(dbg_dir / f"{fr:06d}_{drift_reason}.png"), canvas)
             saved_drift += 1
     cap.release(); writer.release(); csv_f.close()
     if face_csv_f:
@@ -1577,6 +2631,50 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
     print(f"Selected eye: {patient_eye_label(selected_image_eye)}  [{selection_mode}]. "
           f"Scores: Right {sel_scores['L']:.3f}, Left {sel_scores['R']:.3f}.")
 
+    # ---- V1 NYSTAGMUS DETECTION + ARROW OVERLAY (EYEVNG_TRACKING_SPECIFICATION.md §K) ----
+    # Run the detector on the SELECTED anatomical eye's contour-relative iris-centre series.
+    # The detector is a pure consumer of FrameMeasurement values; it never modifies tracking
+    # output. Outputs: nystagmus_events.json (per-clip report), nystagmus_events.csv (per-window
+    # audit trail). The overlay video is then RE-RENDERED in a second pass to add the arrow band
+    # during detected nystagmus windows (spec §G clinical layer).
+    nystagmus_report = None
+    nystagmus_events = []
+    if selected_image_eye in ("L", "R") and fm_ser.get(selected_image_eye):
+        h_eye = [m.eye_local[0] if m is not None else None for m in fm_ser[selected_image_eye]]
+        v_eye = [m.eye_local[1] if m is not None else None for m in fm_ser[selected_image_eye]]
+        fc_eye = [m.frame_confidence if m is not None else 0.0
+                  for m in fm_ser[selected_image_eye]]
+        valid_eye = [bool(m and m.clinical_relative_valid) for m in fm_ser[selected_image_eye]]
+        # series index 0 corresponds to fr=1 (the V1 tracker writes one entry per frame_no >=1)
+        det = NystagmusDetector(selected_image_eye, fps)
+        det_windows, det_events, nystagmus_report = det.analyse(
+            h_eye, v_eye, fc_eye, valid_eye, start_frame_offset=1)
+        nystagmus_events = det_events
+        print(f"Nystagmus (clinical): detected={nystagmus_report.clinical_nystagmus_detected} "
+              f"silent={nystagmus_report.clinical_overlay_silent} "
+              f"direction={nystagmus_report.dominant_beating_direction} "
+              f"({nystagmus_report.dominant_label})  "
+              f"clinical_events={nystagmus_report.clinical_events_count}  "
+              f"candidate_events={nystagmus_report.candidate_events_count}  "
+              f"torsion={nystagmus_report.torsional_status}")
+        _write_nystagmus_outputs(out_dir, nystagmus_report, det_windows, det_events,
+                                  selected_patient_eye)
+        # Second pass: overlay the arrow on top of the pass-1 overlay. Clinical mode renders the
+        # minimal V1 status band on the forehead/lower face; debug mode keeps the verbose band.
+        if overlay_mode == "debug":
+            _annotate_overlay_with_arrows(out_dir / "tracking_overlay.mp4", det_events,
+                                           analysed_eye=patient_eye_label(selected_image_eye))
+        else:
+            _annotate_clinical_overlay_with_arrows(out_dir / "tracking_overlay.mp4",
+                                                    det_events,
+                                                    iris_xy_per_frame_overlay)
+    elif selected_image_eye == "both":
+        # Both-eye mode (INO / skew / dysconjugate / research) — V1 detector is single-eye by
+        # spec §K and is not run here. The overlay still carries the anatomy tracking layer.
+        print("Nystagmus: both-eye mode requested; single-eye detector not run (spec §K).")
+    else:
+        print("Nystagmus: no eye selected; detector not run.")
+
     # blink/occlusion shading per eye (light bands behind the trace; valid_* is None there so the
     # line already breaks — the band makes the excluded period explicit).
     blink_L = [a in ("blink", "occlusion") for a in art_L]
@@ -1674,6 +2772,23 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
                     "template": "template_legacy"}.get(engine, engine)),
         "cft_helper_enabled": bool(cft_helper) if engine == "v1" else False,
         "mediapipe_enabled": not no_mediapipe,
+        "overlay_mode": overlay_mode,
+        # ---- V1 STAGE 0 VALIDITY (runtime fields, added 2026-06-27) ------------
+        # These fields make explicit that the V1 tracker started from a valid V1 Stage 0
+        # approval: full iris/limbus circle as the tracking seed, eye-opening contour as the
+        # reference seed, and NO legacy pupil / four-landmark fallback in use. If Stage 0 had
+        # been invalid, run() would have aborted before reaching this metadata write and the
+        # tombstone payload from _write_invalid_stage0_outputs would be present instead.
+        "stage0_valid_for_v1": True,
+        "tracking_seed_source": "approved_iris_limbus",
+        "tracking_seed_target": "iris_limbus",
+        "reference_seed_source": "approved_eye_opening_contour",
+        "reference_seed_target": "eye_opening_contour",
+        "legacy_pupil_fallback_used": bool(approved.get("legacy_pupil_fallback_used")),
+        "legacy_four_point_contour_fallback_used":
+            bool(approved.get("legacy_four_point_contour_fallback_used")),
+        "approval_schema_version": approved.get("approval_schema_version"),
+        "analysis_valid": True,
         "manual_corrections": (tracker.corrections if tracker else []),
         "engine_stats_left": eye_stats["L"],
         "engine_stats_right": eye_stats["R"],
@@ -1737,13 +2852,35 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
             "right_initialized": "R" in contour_trackers,
             "uncertain_counts": reference_uncertain_counts,
         },
-        "outputs": {"overlay": str(out_dir / "tracking_overlay.mp4"),
+        "nystagmus": ({
+            "analysed_eye": nystagmus_report.analysed_eye,
+            "clinical_nystagmus_detected": nystagmus_report.clinical_nystagmus_detected,
+            "clinical_overlay_silent": nystagmus_report.clinical_overlay_silent,
+            "dominant_beating_direction": nystagmus_report.dominant_beating_direction,
+            "dominant_label": nystagmus_report.dominant_label,
+            "torsional_status": nystagmus_report.torsional_status,
+            "candidate_events_count": nystagmus_report.candidate_events_count,
+            "clinical_events_count": nystagmus_report.clinical_events_count,
+            "n_windows": nystagmus_report.n_windows,
+            "n_candidate_windows": nystagmus_report.n_candidate_windows,
+        } if nystagmus_report is not None else None),
+        "outputs": {# anatomy + tracking layer only (verification artefact)
+                    "overlay": str(out_dir / "tracking_overlay.mp4"),
+                    # V1 PRIMARY clinical artefact: anatomy + tracking + nystagmus arrow/label
+                    # (only written when the detector ran; spec §G clinical layer)
+                    "overlay_with_arrow": (str(out_dir / "tracking_overlay_with_arrow.mp4")
+                                           if nystagmus_report is not None else None),
                     "csv": str(out_dir / "tracking.csv"),
                     "aperture_landmarks_csv": (str(out_dir / "face_landmarks.csv") if face_tracker else None),
-                    # CLINICAL (eye-local) traces:
-                    "trace_eyelocal_h": str(out_dir / "trace_eyelocal_h.png"),
-                    "trace_eyelocal_v": str(out_dir / "trace_eyelocal_v.png"),
-                    "trace_eyelocal_velocity_h": str(out_dir / "trace_eyelocal_velocity_h.png"),
+                    # V1 PRIMARY clinical report (spec §K.6):
+                    "nystagmus_events_json": (str(out_dir / "nystagmus_events.json")
+                                              if nystagmus_report is not None else None),
+                    "nystagmus_events_csv":  (str(out_dir / "nystagmus_events.csv")
+                                              if nystagmus_report is not None else None),
+                    # debug-only contour-relative position/velocity plots (audit only):
+                    "trace_eyelocal_h_debug": str(out_dir / "trace_eyelocal_h.png"),
+                    "trace_eyelocal_v_debug": str(out_dir / "trace_eyelocal_v.png"),
+                    "trace_eyelocal_velocity_h_debug": str(out_dir / "trace_eyelocal_velocity_h.png"),
                     # debug only (image-space, includes head movement):
                     "trace_image_x_debug": str(out_dir / "trace_image_x.png"),
                     "trace_image_y_debug": str(out_dir / "trace_image_y.png")},
@@ -1764,6 +2901,224 @@ def _fm_cols(fm):
     return [fm.state, fm.validity, int(fm.drift_flag), fm.drift_reason,
             _r(fm.rotation), _r(fm.feature_confidence_mean), _r(fm.composite_confidence),
             _r(fm.frame_confidence), fm.n_active, fm.n_trusted]
+
+
+# ----------------------------------------------------------------------------- §K outputs
+def _write_invalid_stage0_outputs(out_dir, approved, reasons=None):
+    """V1 detector protection — when Stage 0 is invalid, write a TOMBSTONE
+    `nystagmus_events.json` AND a `metadata.json` recording the failure, so any downstream
+    reader sees an explicit failure rather than the absence of a report or a misleading
+    'no nystagmus detected' from invalid tracking. No tracker is constructed. No detector
+    runs. No overlay video is produced. No arrow can possibly be displayed."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    approved = approved or {}
+    rejection_details = list(reasons or [])
+    base_payload = {
+        "stage0_valid_for_v1": False,
+        "analysis_valid": False,
+        "rejection_reason": "invalid_stage0_approval",
+        "clinical_nystagmus_detected": False,
+        "clinical_overlay_silent": True,
+        "approval_schema_version": approved.get("approval_schema_version"),
+        "tracking_target": approved.get("tracking_target"),
+        "reference_target": approved.get("reference_target"),
+        "iris_limbus_approved": approved.get("iris_limbus_approved"),
+        "eye_opening_contour_approved": approved.get("eye_opening_contour_approved"),
+        "legacy_pupil_fallback_used": approved.get("legacy_pupil_fallback_used"),
+        "legacy_four_point_contour_fallback_used":
+            approved.get("legacy_four_point_contour_fallback_used"),
+        "rejection_details": rejection_details,
+        "note": ("eye_vng V1 requires both full iris/limbus approval and "
+                 "eye-opening/orbital margin contour approval. Run --approve again and mark "
+                 "both structures. Invalid Stage 0 is NOT a negative clinical result; it is a "
+                 "failed analysis."),
+    }
+    try:
+        (out_dir / "nystagmus_events.json").write_text(json.dumps(base_payload, indent=2),
+                                                       encoding="utf-8")
+        # Also drop a minimal metadata.json so any consumer querying metadata sees the failure
+        # rather than reading a stale metadata.json from a previous (successful) run.
+        (out_dir / "metadata.json").write_text(json.dumps({
+            **base_payload,
+            "video_stem": out_dir.name,
+        }, indent=2), encoding="utf-8")
+        # Delete stale clinical artefacts from a previous (valid) run so the directory cannot
+        # contain a misleading overlay video or per-window CSV alongside the invalid-analysis
+        # tombstone. Anything else in the directory (debug frames, etc.) is left alone.
+        for stale in ("tracking_overlay.mp4", "tracking_overlay_with_arrow.mp4",
+                       "nystagmus_events.csv", "tracking.csv"):
+            p = out_dir / stale
+            try:
+                if p.exists():
+                    p.unlink()
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
+def _write_nystagmus_outputs(out_dir, report, windows, events, analysed_eye):
+    """Persist the V1 nystagmus detection results (spec §K.6).
+      * nystagmus_events.json — per-clip report + merged events (primary clinical report)
+      * nystagmus_events.csv  — per-window audit trail (one row per sliding window)
+    The on-overlay arrow is drawn in a separate second-pass step."""
+    payload = {
+        "analysed_eye": report.analysed_eye,
+        "image_side_internal": report.image_side_internal,
+        # CLINICAL tier — the only fields that drive the overlay
+        "clinical_nystagmus_detected": report.clinical_nystagmus_detected,
+        "clinical_overlay_silent": report.clinical_overlay_silent,
+        "dominant_beating_direction": report.dominant_beating_direction,
+        "dominant_label": report.dominant_label,
+        "dominant_arrow": report.dominant_arrow,
+        "clinical_events_count": report.clinical_events_count,
+        # CANDIDATE tier — debug only; never displayed
+        "candidate_events_count": report.candidate_events_count,
+        "candidate_events": [
+            {
+                "candidate_event": e.candidate_event,
+                "clinically_confirmed": e.clinically_confirmed,
+                "displayed_on_overlay": e.displayed_on_overlay,
+                "rejection_reason": e.rejection_reason,
+                "not_clinically_confirmed": (not e.clinically_confirmed),
+                "time_window": {
+                    "start_frame": e.start_frame, "end_frame": e.end_frame,
+                    "start_sec": e.start_sec, "end_sec": e.end_sec,
+                    "duration_sec": e.duration_sec,
+                },
+                "direction_estimate": e.beating_direction,
+                "label_if_confirmed": e.label,
+                "arrow_if_confirmed": e.arrow,
+                "beat_count": e.n_beats_total,
+                "n_windows": e.n_windows,
+                "mean_beat_rate_hz": e.mean_beat_rate_hz,
+                "mean_direction_consistency": e.mean_direction_consistency,
+                "mean_rhythmicity": e.mean_rhythmicity,
+                "confidence": e.mean_confidence,
+            } for e in events],
+        # shared
+        "torsional_status": report.torsional_status,
+        "n_windows": report.n_windows,
+        "n_candidate_windows": report.n_candidate_windows,
+        "parameters": report.parameters,
+        "torsion_note": ("Torsion cannot be assessed from iris-circle centre motion alone. "
+                         "It requires iris-texture rotation tracking inside the iris circle, "
+                         "which is a future module. Reported as not_assessed."),
+        "calibration_note": ("samples/2_short15.mp4 is the current V1 negative-control / "
+                              "no-nystagmus calibration clip. If this clip produces a DISPLAYED "
+                              "clinical nystagmus label, the detector has failed calibration. "
+                              "Filename is not hardcoded into runtime logic; the suppression "
+                              "comes from the validity gate, amplitude floor, and clinical "
+                              "confirmation gates."),
+    }
+    (out_dir / "nystagmus_events.json").write_text(json.dumps(payload, indent=2),
+                                                   encoding="utf-8")
+    with (out_dir / "nystagmus_events.csv").open("w", newline="", encoding="utf-8") as f:
+        cw = csv.writer(f)
+        cw.writerow(["window_start_frame", "window_end_frame", "window_start_sec",
+                     "window_end_sec", "nystagmus_present", "beating_direction", "label",
+                     "n_beats", "mean_beat_rate_hz", "direction_consistency", "rhythmicity",
+                     "confidence", "rejection_reason"])
+        for w in windows:
+            cw.writerow([w.window_start_frame, w.window_end_frame,
+                         w.window_start_sec, w.window_end_sec,
+                         int(w.nystagmus_present), w.beating_direction, w.label,
+                         w.n_beats, w.mean_beat_rate_hz, w.direction_consistency,
+                         w.rhythmicity, w.confidence, w.rejection_reason])
+
+
+def _annotate_clinical_overlay_with_arrows(overlay_path, events, iris_xy_per_frame):
+    """V1 CLINICAL pass-2 annotator. Reads the anatomy-only clinical overlay produced in pass 1
+    and writes a second file alongside it with the V1 clinical status band added every frame:
+        * "Nystagmus detected: <Direction>" + arrow during a detected event
+        * "No nystagmus detected" otherwise
+    Placement chosen per-frame from the tracked iris position so the band stays on the forehead
+    or the lower face — never on the eyes.
+
+    `iris_xy_per_frame` is a list (length = total frames written by pass 1) of [(x,y), ...]
+    points in the SAME pixel space as the overlay frames; used to decide top vs bottom band.
+
+    Returns the path to the annotated video, or None if the source overlay is missing.
+    """
+    overlay_path = Path(overlay_path)
+    if not overlay_path.exists():
+        return None
+    cap = cv2.VideoCapture(str(overlay_path))
+    if not cap.isOpened():
+        return None
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    out_path = overlay_path.with_name(overlay_path.stem + "_with_arrow.mp4")
+    writer = cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
+    fr = 0
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        fr += 1
+        # NEGATIVE-CONTROL RULE (added 2026-06-27): the clinical overlay is SILENT unless a
+        # clinically-confirmed event is active. event_for_frame() already filters out unconfirmed
+        # candidates, so when no event is active here we draw NOTHING — no arrow, no "No
+        # nystagmus detected" caption, no doubtful-nystagmus text.
+        ev = event_for_frame(events, fr)
+        if ev is not None:
+            status = _short_direction_label(ev.beating_direction)
+            glyph = ev.arrow
+            iris_pts = iris_xy_per_frame[fr - 1] if 0 <= fr - 1 < len(iris_xy_per_frame) else []
+            draw_clinical_status_band(frame, status, glyph, iris_pts=iris_pts)
+        writer.write(frame)
+    cap.release()
+    writer.release()
+    return out_path
+
+
+def _annotate_overlay_with_arrows(overlay_path, events, analysed_eye=""):
+    """Render a SECOND overlay video — `tracking_overlay_with_arrow.mp4` — that adds the V1
+    nystagmus arrow + label on top of the anatomy-tracking overlay produced in the main pass.
+
+    Two artefacts are kept by design:
+      * `tracking_overlay.mp4`             — anatomy + tracking layer only (verification)
+      * `tracking_overlay_with_arrow.mp4`  — anatomy + tracking + nystagmus arrow/label
+                                              (V1 PRIMARY clinical artefact; spec §G)
+
+    The arrow band is drawn ONLY during detected nystagmus events; outside those frames a
+    small "No nystagmus detected" caption is drawn instead. Both labels live in the top-left
+    corner — chosen because the V1 reference clips zoom over the face and the top-left is
+    consistently free of facial anatomy.
+
+    Returns the path to the new annotated video, or None if the source overlay was missing.
+    """
+    overlay_path = Path(overlay_path)
+    if not overlay_path.exists():
+        return None
+    cap = cv2.VideoCapture(str(overlay_path))
+    if not cap.isOpened():
+        return None
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    out_path = overlay_path.with_name(overlay_path.stem + "_with_arrow.mp4")
+    writer = cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
+    fr = 0
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        fr += 1
+        ev = event_for_frame(events, fr)
+        if ev is not None:
+            draw_nystagmus_arrow(frame, ev.label, ev.arrow,
+                                 n_beats=ev.n_beats_total,
+                                 rate_hz=ev.mean_beat_rate_hz,
+                                 confidence=ev.mean_confidence,
+                                 analysed_eye=analysed_eye)
+        else:
+            draw_no_nystagmus_caption(frame, analysed_eye=analysed_eye)
+        writer.write(frame)
+    cap.release()
+    writer.release()
+    return out_path
 
 
 # ----------------------------------------------------------------------------- review mode
@@ -1818,6 +3173,8 @@ def main():
     ap.add_argument("--cft-helper", action="store_true",
                     help="(v1 engine) enable the CFT as a motion-prediction helper "
                          "(does not change the clinical centre or validity)")
+    ap.add_argument("--overlay-mode", choices=["clinical", "debug"], default="clinical",
+                    help="overlay video presentation: clinical (default, minimal) or debug")
     args = ap.parse_args()
     if args.propose:
         propose_init(args.video, args.output_dir)
@@ -1827,7 +3184,8 @@ def main():
         review(args.video, args.output_dir)
     else:
         run(args.video, args.output_dir, filter_mode=args.filter, show_raw=args.show_raw_trace,
-            engine=args.engine, no_mediapipe=args.no_mediapipe, cft_helper=args.cft_helper)
+            engine=args.engine, no_mediapipe=args.no_mediapipe, cft_helper=args.cft_helper,
+            overlay_mode=args.overlay_mode)
 
 
 if __name__ == "__main__":

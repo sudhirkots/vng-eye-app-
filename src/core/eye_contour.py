@@ -59,14 +59,42 @@ class EyeOpeningContour:
                 (iris_center[1] - ex["upper"][1]) / h)
 
 
-def contour_from_approved(approved: dict, eye: str, iris: Optional[Tuple[float, float, float]] = None) -> Optional[np.ndarray]:
-    contours = approved.get("eye_opening_contours") or approved.get("eye_opening_contour") or {}
-    raw = contours.get(eye) if isinstance(contours, dict) else None
+def contour_from_approved(approved: dict, eye: str,
+                          iris: Optional[Tuple[float, float, float]] = None,
+                          allow_legacy_fallback: bool = False) -> Optional[np.ndarray]:
+    """Load the V1 eye-opening / orbital margin contour for ONE eye from the approved file.
+
+    V1 RULE (locked 2026-06-27): there is no silent fallback. The approved file must contain
+    a clinician-approved `eye_opening_contours` block. Without that block this function
+    returns None; the V1 runtime gate at `iris_tracker.run()` rejects approvals that don't
+    have it, so this branch is normally unreachable in production.
+
+    `allow_legacy_fallback=True` is provided ONLY for development/debug tooling (e.g. a
+    one-off inspection script). It permits the old fallbacks — singular `eye_opening_contour`
+    key, four-landmark ellipse, iris-shaped fallback — and is NEVER used by the V1 runtime.
+    """
+    contours = approved.get("eye_opening_contours") or {}
+    if not isinstance(contours, dict):
+        contours = {}
+    raw = contours.get(eye)
     if raw:
         pts = [(p["x"], p["y"]) if isinstance(p, dict) else (p[0], p[1]) for p in raw]
         if len(pts) >= 6:
             return np.asarray(pts, np.float32)
 
+    if not allow_legacy_fallback:
+        # V1 runtime path: no silent fallback. Caller (run() / V1 schema gate) must reject the
+        # approval if we reach here. Returning None forces that to happen at construction time.
+        return None
+
+    # ---- legacy fallback path (debug tooling only) ------------------------------
+    legacy_contours = approved.get("eye_opening_contour") or {}
+    if isinstance(legacy_contours, dict):
+        raw = legacy_contours.get(eye)
+        if raw:
+            pts = [(p["x"], p["y"]) if isinstance(p, dict) else (p[0], p[1]) for p in raw]
+            if len(pts) >= 6:
+                return np.asarray(pts, np.float32)
     lm = approved.get("face_landmarks") or {}
     names = {
         "inner": f"inner_canthus_{eye}",
@@ -79,7 +107,6 @@ def contour_from_approved(approved: dict, eye: str, iris: Optional[Tuple[float, 
             return None
         cx, cy, r = iris
         return _ellipse_contour((cx, cy), 2.8 * r, 1.25 * r, n=48)
-
     inner = _as_point(lm[names["inner"]])
     outer = _as_point(lm[names["outer"]])
     upper = _as_point(lm[names["upper"]])

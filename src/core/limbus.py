@@ -58,7 +58,8 @@ def _whiteness(bgr_patch):
 
 
 def _radial_edges(gray, cx, cy, r_est, n_rays, r_lo_f, r_hi_f, min_grad, exclude_top_deg,
-                  exclude_bottom_deg=15.0, sclera_step=14.0, bgr=None, max_sat=0.45, min_val=0.32):
+                  exclude_bottom_deg=15.0, sclera_step=14.0, bgr=None, max_sat=0.45, min_val=0.32,
+                  polygon=None):
     """Find one limbus edge candidate per ray: the DARK→BRIGHT transition where the iris meets the
     sclera. Guards that reject eyelid / lash / lid-skin edges:
       • ASYMMETRIC lid masking — skip a wide wedge at the TOP (±exclude_top_deg around 12 o'clock,
@@ -103,6 +104,15 @@ def _radial_edges(gray, cx, cy, r_est, n_rays, r_lo_f, r_hi_f, min_grad, exclude
                     continue
             best_j, best_d = j, deriv[j]
         if best_j >= 0:
+            # 2026-06-28: anatomical-engine containment hook. If a Stage-0 eye-opening
+            # polygon is supplied, reject any edge pixel that falls OUTSIDE it. The fit
+            # radius/centre are still free, but the EDGE EVIDENCE must lie within the
+            # clinician-approved eye opening. This is the only thing standing between the
+            # tracker and the cheek/nose/brow.
+            if polygon is not None:
+                ex, ey = float(xs[best_j]), float(ys[best_j])
+                if cv2.pointPolygonTest(polygon, (ex, ey), False) < 0:
+                    continue
             pts.append((xs[best_j], ys[best_j])); grads.append(float(best_d))
     return np.array(pts, np.float32), np.array(grads, np.float32)
 
@@ -141,14 +151,14 @@ def _fit_centre_fixed_r(pts, prior, R, tol):
 
 def fit_limbus(gray, cx, cy, r_est, n_rays=120, r_lo_f=0.6, r_hi_f=1.45,
                min_grad=1.5, exclude_top_deg=55.0, ransac_iters=200, tol_f=0.05,
-               try_ellipse=True, bgr=None, r_fixed=None) -> Optional[LimbusFit]:
+               try_ellipse=True, bgr=None, r_fixed=None, polygon=None) -> Optional[LimbusFit]:
     """Fit the iris–sclera boundary near (cx,cy) with expected radius r_est. Pass `bgr` (the colour
     frame) for the sclera-whiteness gate. Pass `r_fixed` to hold the iris radius CONSTANT and fit only
     the centre from the visible arc (occlusion-invariant — eyelid coverage cannot move the centre or
     shrink the disc); the radius is established by an earlier free fit when the iris is well seen.
     Returns a LimbusFit (with arc_coverage + the visible arc points), or None if too few edges."""
     pts, grads = _radial_edges(gray, cx, cy, r_est, n_rays, r_lo_f, r_hi_f, min_grad, exclude_top_deg,
-                               bgr=bgr)
+                               bgr=bgr, polygon=polygon)
     n_edges = len(pts)
     if n_edges < 6:
         return None
