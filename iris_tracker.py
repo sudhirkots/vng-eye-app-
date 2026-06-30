@@ -28,6 +28,7 @@ from src.core.iris_tracking import (APERTURE, CompositeFeatureTracker, EyeObs, F
                                      select_init_frame)
 from src.core.nystagmus_detector import (NystagmusDetector, NystagmusParams,
                                           event_for_frame)
+from src.core.iris_candidate_validator import validate_iris_candidate
 from src.core.v1_tracker import V1Tracker
 
 APERTURE_NAMES = tuple(APERTURE.keys())   # the 8 eye-aperture landmark names (4 per eye)
@@ -1728,9 +1729,12 @@ def apply_landmark_calibration(proposal, calib=None):
 
 def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adaptive", show_raw=True,
         eye="auto", engine="v1", no_mediapipe=False, cft_helper=False,
-        overlay_mode="clinical"):
+        overlay_mode="clinical", disable_rit_validator=False, output_suffix=""):
     video_path = Path(video_path)
-    out_dir = Path(output_dir) / (video_path.stem + "_tracked")
+    out_dir = Path(output_dir) / (video_path.stem + "_tracked" + (output_suffix or ""))
+    if disable_rit_validator:
+        print("[RIT] validator DISABLED for this run (comparison/baseline mode). "
+              "raw_* and valid_* will only differ by upstream V1 limbus checks.")
 
     # --- STAGE 0 GATE: tracking must not begin until landmarks are approved ---
     approved = load_approved(output_dir, video_path)
@@ -2002,29 +2006,6 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
               f"outside_tol={PLAUSIBILITY_OUTSIDE_TOL_PX:.0f}px, "
               f"radius_band=[{PLAUSIBILITY_R_LO:.2f},{PLAUSIBILITY_R_HI:.2f}] x Stage-0")
 
-    def _v1_plausibility_check(fm, eye_key: str):
-        """Lenient anatomical check on a V1 FrameMeasurement.
-        Returns (ok, reason). ok=True → leave alone. ok=False → caller marks
-        the FM as failed without touching V1 state."""
-        if eye_key not in plausibility_polys or plausibility_polys[eye_key] is None:
-            return True, ""
-        if fm.iris_centre is None or fm.iris_radius is None:
-            return True, ""
-        cx, cy = float(fm.iris_centre[0]), float(fm.iris_centre[1])
-        r = float(fm.iris_radius)
-        # 1. Containment: signed distance to polygon (+inside, -outside, |.|=px).
-        dist_to_poly = cv2.pointPolygonTest(plausibility_polys[eye_key], (cx, cy), True)
-        if dist_to_poly < -PLAUSIBILITY_OUTSIDE_TOL_PX:
-            return False, f"outside_contour({-dist_to_poly:.0f}px)"
-        # 2. Radius sanity vs Stage-0.
-        r_st0 = plausibility_stage0_r.get(eye_key, 0.0)
-        if r_st0 > 0:
-            if r < PLAUSIBILITY_R_LO * r_st0:
-                return False, f"radius_too_small(r={r:.0f}<{PLAUSIBILITY_R_LO*r_st0:.0f})"
-            if r > PLAUSIBILITY_R_HI * r_st0:
-                return False, f"radius_too_large(r={r:.0f}>{PLAUSIBILITY_R_HI*r_st0:.0f})"
-        return True, ""
-
     def _classify_orbit_outside(fm, eye_key: str, frame_no: int) -> str:
         """When the iris centre is outside the static Stage-0 contour, decide
         whether this is tracker drift or just a stale static contour because the
@@ -2074,54 +2055,64 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
         if len(buf) > ORBIT_MOTION_HISTORY:
             del buf[0]
 
-    def _apply_v1_plausibility(fm, eye_key: str, frame_no: int):
-        """If the FM fails the plausibility check, mark it as a gap (iris_valid
-        False, drift flag set) and log once. V1's internal state is untouched.
+    def _apply_v1_plausibility(fm, eye_key: str, frame_no: int, gray=None, bgr=None):
+        """Validate the V1 iris candidate against the V2 clinical definition (dark circular/arc iris +
+        scleral white support + Stage-0 radius + orbital containment) via
+        `iris_candidate_validator.validate_iris_candidate`. On failure, mark the FM as a gap
+        (iris_valid False, drift flag + reason) and log; V1's internal state is never touched.
 
-        2026-06-29 — orbit-guardrail discrimination (on by default for V1):
-        When the failure is 'outside_contour', we further classify whether the
-        iris is genuinely drifting onto face / cheek / brow ('tracker_drift_
-        outside_orbit') OR the iris is still being tracked correctly but the
-        static Stage-0 oval has gone stale because the head moved
-        ('good_iris_but_static_orbit_stale'). In the stale-oval case we KEEP
-        iris_valid=True so downstream nystagmus analysis still trusts the frame;
-        we only tag drift_reason for transparency.
+        Preserves the 2026-06-29 orbit-guardrail discrimination: when the SOLE failure is leaving the
+        orbital oval but the image content is still iris-like (dark arc + sclera all passed → reason
+        'outside_orbit'), defer to `_classify_orbit_outside` so a head-moved frame (static oval gone
+        stale) stays clinically VALID, while genuine drift onto face/cheek/brow is rejected.
+
+        Conservative by design: a false negative (freeze / needs-rescue) is acceptable; a false
+        positive (locking onto skin/brow/shadow) is dangerous.
         """
-        ok, reason = _v1_plausibility_check(fm, eye_key)
-        if ok:
-            # Frame is inside the static oval AND radius is sane: just record
-            # the iris in the motion history for future discrimination calls.
-            fm.drift_reason = ""           # keep as-is — leave existing benign reason
-            _update_iris_history(fm, eye_key, frame_no)
+        if fm.iris_centre is None or fm.iris_radius is None:
             return
-        # Failed the basic check. Pull apart by reason.
-        if reason.startswith("outside_contour"):
-            cls = _classify_orbit_outside(fm, eye_key, frame_no)
-            if cls == "good_iris_but_static_orbit_stale":
-                # Keep clinically valid; record an honest reason so the CSV /
-                # downstream tools can see what happened.
-                fm.drift_reason = f"orbit_status:good_iris_but_static_orbit_stale|{reason}"
-                _update_iris_history(fm, eye_key, frame_no)
-                print(f"[v1-orbit-guardrail][{eye_key}] fr={frame_no} "
-                      f"orbit_status=good_iris_but_static_orbit_stale ({reason})")
-                return
-            # cls == 'tracker_drift_outside_orbit'
-            print(f"[v1-orbit-guardrail][{eye_key}] fr={frame_no} "
-                  f"orbit_status=tracker_drift_outside_orbit ({reason})")
+        # RIT precondition: Stage-0 clinician-approved limbus radius is mandatory. Without it the
+        # validator's radius gate silently disables — refuse to run the frame instead.
+        stage0_r = plausibility_stage0_r.get(eye_key, 0.0)
+        if stage0_r <= 0:
+            print(f"[iris-validator][{eye_key}] fr={frame_no} reject=no_stage0_radius")
             fm.iris_valid = False
             fm.drift_flag = True
-            fm.drift_reason = f"orbit_status:tracker_drift_outside_orbit|{reason}"
+            fm.drift_reason = "iris_validator:no_stage0_radius"
             return
-        # Radius-based or any other plausibility failure: keep the original behaviour.
-        print(f"[v1-plausibility][{eye_key}] fr={frame_no} reject={reason}")
+        cx, cy = float(fm.iris_centre[0]), float(fm.iris_centre[1])
+        r = float(fm.iris_radius)
+        hist = iris_history.get(eye_key) or []
+        last_centre = (hist[-1][1], hist[-1][2]) if hist else None
+        res = validate_iris_candidate(
+            gray, bgr, cx, cy, r,
+            stage0_radius=stage0_r,
+            orbit_poly=plausibility_polys.get(eye_key),
+            last_centre=last_centre, interocular=interocular)
+
+        if res.accepted:
+            _update_iris_history(fm, eye_key, frame_no)
+            if frame_no % 90 == 0:                 # periodic heartbeat so the log shows liveness
+                print(res.log_line(eye_key, frame_no))
+            return
+
+        # Content is iris-like but the centre left the oval → distinguish head-moved-stale-oval from
+        # true drift (keeps the clinically-valid stale-oval frames; rejects real face drift).
+        if res.reject_reason == "outside_orbit":
+            cls = _classify_orbit_outside(fm, eye_key, frame_no)
+            if cls == "good_iris_but_static_orbit_stale":
+                fm.drift_reason = "orbit_status:good_iris_but_static_orbit_stale|iris_validator:outside_orbit"
+                _update_iris_history(fm, eye_key, frame_no)
+                print(res.log_line(eye_key, frame_no) + " orbit_status=good_iris_but_static_orbit_stale")
+                return
+
+        # Genuine reject: freeze this frame (mark invalid). iris_centre/iris_radius are left as V1
+        # produced them so the overlay can dim/redden a "needs rescue" marker; downstream consumers
+        # gate on iris_valid + drift_flag.
+        print(res.log_line(eye_key, frame_no))
         fm.iris_valid = False
         fm.drift_flag = True
-        fm.drift_reason = f"plausibility:{reason}"
-        # Leave iris_centre / iris_radius as V1 produced them so the overlay can
-        # render a dimmed/red "needs rescue" marker if it chooses. The validity
-        # property (state in VALID_STATES AND iris_centre not None) will still
-        # report 'valid' on its own, but downstream consumers gate on iris_valid
-        # and drift_flag — see segments.py + CSV writer.
+        fm.drift_reason = f"iris_validator:{res.reject_reason}"
 
     face_appr = approved.get("face_landmarks") or {}
     init_face_mp = (detector.face_landmarks(init_frame) or {}) if (detector and face_appr and ok) else {}
@@ -2302,10 +2293,10 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
                 fm_L = cft["L"].step(gray, fr, tms, t, le_mp.ear if le_mp.detected else None,
                                       aperture=_aperture_by_eye("L"), mp_iris=_mpiris(le_mp), bgr=frame,
                                       reference_state=ref_state, reference_confidence=ref_conf)
-                # V1 plausibility filter — only fires for engine=="v1"; for other
-                # engines plausibility_polys is empty and the check returns True.
-                if engine == "v1":
-                    _apply_v1_plausibility(fm_L, "L", fr)
+                # V1 iris-candidate validator — only fires for engine=="v1"; needs the frame
+                # (gray + colour) to judge dark-arc + scleral-white content.
+                if engine == "v1" and not disable_rit_validator:
+                    _apply_v1_plausibility(fm_L, "L", fr, gray, frame)
                 lt = fm_to_track(fm_L)
             else:
                 lt = Track("lost", None, None)
@@ -2314,8 +2305,8 @@ def run(video_path, output_dir="outputs", max_debug_frames=80, filter_mode="adap
                 fm_R = cft["R"].step(gray, fr, tms, t, re_mp.ear if re_mp.detected else None,
                                       aperture=_aperture_by_eye("R"), mp_iris=_mpiris(re_mp), bgr=frame,
                                       reference_state=ref_state, reference_confidence=ref_conf)
-                if engine == "v1":
-                    _apply_v1_plausibility(fm_R, "R", fr)
+                if engine == "v1" and not disable_rit_validator:
+                    _apply_v1_plausibility(fm_R, "R", fr, gray, frame)
                 rt = fm_to_track(fm_R)
             else:
                 rt = Track("lost", None, None)
@@ -3175,6 +3166,12 @@ def main():
                          "(does not change the clinical centre or validity)")
     ap.add_argument("--overlay-mode", choices=["clinical", "debug"], default="clinical",
                     help="overlay video presentation: clinical (default, minimal) or debug")
+    ap.add_argument("--disable-rit-validator", action="store_true",
+                    help="(v1 engine) skip the RIT iris-candidate validator — produces a "
+                         "no-guardrails baseline CSV/overlay for comparison. Do NOT use clinically.")
+    ap.add_argument("--output-suffix", default="",
+                    help="appended to the _tracked folder name (e.g. '_no_guardrails') so a "
+                         "comparison run does not overwrite the guarded output")
     args = ap.parse_args()
     if args.propose:
         propose_init(args.video, args.output_dir)
@@ -3185,7 +3182,8 @@ def main():
     else:
         run(args.video, args.output_dir, filter_mode=args.filter, show_raw=args.show_raw_trace,
             engine=args.engine, no_mediapipe=args.no_mediapipe, cft_helper=args.cft_helper,
-            overlay_mode=args.overlay_mode)
+            overlay_mode=args.overlay_mode, disable_rit_validator=args.disable_rit_validator,
+            output_suffix=args.output_suffix)
 
 
 if __name__ == "__main__":

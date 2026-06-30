@@ -21,6 +21,30 @@ detector does not run. The full rule is in §17.
 
 ---
 
+## ⚠ Naming decision (locked 2026-06-29): RIT — Rescue Iris Tracker
+
+> The clinically supervised workflow is now named **RIT: Rescue Iris Tracker**.
+> RIT means existing limbus tracking constrained by clinician-marked anatomy, strict
+> iris-identification rules, and rescue correction when uncertain.
+
+Full workflow name: **RIT with Anatomical Guardrails**. RIT is composed of:
+
+1. clinician-marked orbit / eye-opening oval,
+2. clinician-marked eyeball / sclera oval,
+3. clinician-marked full iris / limbus circle,
+4. existing limbus-based iris tracking (the engine is reused, not rewritten),
+5. strict anatomical guardrails (RIT Guardrails),
+6. conservative freeze-on-uncertainty,
+7. rescue correction when needed (RIT Rescue).
+
+Component names to use in code and docs: `RIT`, `RIT Stage 0`, `RIT Tracking`,
+`RIT Guardrails`, `RIT Rescue`, `RIT with Anatomical Guardrails`. This workflow must **not**
+be called "V1-plus-anatomy", "V2 tracker", or "anatomical engine". The two source-of-truth
+rule documents for RIT are [IRIS_IDENTIFICATION_RULES_V2.md](IRIS_IDENTIFICATION_RULES_V2.md)
+and [ORBIT_AND_IRIS_TRACKING_RULES_V2.md](ORBIT_AND_IRIS_TRACKING_RULES_V2.md).
+
+---
+
 ## 1. The original clinical idea
 
 The starting idea was simple and clinically attractive:
