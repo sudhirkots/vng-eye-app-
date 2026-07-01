@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RIT iris / sclera paint tool</title>
+<style>
+  :root { --bg:#111; --panel:#1b1b1b; --ink:#eee; --iris:#ff0000; --sclera:#1e6bff; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:Segoe UI, system-ui, sans-serif; background:var(--bg); color:var(--ink);
+         user-select:none; -webkit-user-select:none; touch-action:none; }
+  #bar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:8px 10px; background:var(--panel);
+         position:sticky; top:0; border-bottom:1px solid #333; }
+  button, label.btn { background:#2a2a2a; color:var(--ink); border:1px solid #444; border-radius:6px;
+         padding:7px 11px; font-size:14px; cursor:pointer; }
+  button.active { outline:2px solid #fff; }
+  #irisBtn.active { background:#5a1414; } #scleraBtn.active { background:#14315a; } #eraseBtn.active { background:#444; } #fillBtn.active { background:#145a2e; }
+  input[type=range] { width:130px; vertical-align:middle; }
+  #wrap { display:flex; justify-content:center; padding:10px; }
+  canvas { background:#000; max-width:98vw; touch-action:none; box-shadow:0 0 0 1px #333; cursor:crosshair; }
+  #status { font-size:13px; opacity:.85; }
+  .sep { width:1px; height:26px; background:#3a3a3a; margin:0 2px; }
+  #hint { padding:2px 12px 10px; font-size:12.5px; opacity:.75; }
+  b.iris { color:#ff6b6b; } b.scl { color:#7aa8ff; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <label class="btn">📂 Load images<input id="file" type="file" accept="image/png,image/jpeg" multiple hidden></label>
+  <span class="sep"></span>
+  <button id="irisBtn" class="active">● Iris (red)</button>
+  <button id="scleraBtn">● Sclera (blue)</button>
+  <button id="eraseBtn">Erase</button>
+  <button id="fillBtn">🪣 Fill</button>
+  <span>Size <input id="size" type="range" min="3" max="80" value="22"><span id="sizeVal">22</span></span>
+  <button id="undo">↶ Undo</button>
+  <button id="clear">Clear frame</button>
+  <span class="sep"></span>
+  <button id="prev">◀ Prev</button>
+  <span id="status">no images</span>
+  <button id="next">Next ▶</button>
+  <span class="sep"></span>
+  <button id="export">⬇ Download masks (.zip)</button>
+  <label>opacity <input id="alpha" type="range" min="20" max="100" value="55"></label>
+</div>
+<div id="wrap"><canvas id="view"></canvas></div>
+<div id="hint">Paint <b class="iris">RED</b> over the dark iris and <b class="scl">BLUE</b> over all the white/pink
+  sclera between the eyelids. Leave lids / lashes / skin blank. Pen &amp; touch supported.
+  Keys: <b>I</b>=iris <b>S</b>=sclera <b>E</b>=erase <b>F</b>=fill (click inside a closed outline to fill it) <b>[ ]</b>=size <b>Z</b>=undo <b>← →</b>=prev/next.
+  Work autosaves in this browser; click <b>Download masks</b> when done and put the .zip back in OneDrive.</div>
+
+<script>
+const IRIS=[255,0,0], SCLERA=[30,107,255];
+let imgs=[];        // {name, bitmap, w, h, mask:canvas, undo:[]}
+let idx=0, tool='iris', fillColor='iris', brush=22, alpha=0.55, drawing=false, last=null;
+const view=document.getElementById('view'), vctx=view.getContext('2d');
+
+// ---- persistence (localStorage: mask dataURLs keyed by filename) ----
+const LS='rit_paint_masks_v1';
+function saveMask(i){ try{ const s=JSON.parse(localStorage.getItem(LS)||'{}'); s[imgs[i].name]=imgs[i].mask.toDataURL('image/png'); localStorage.setItem(LS,JSON.stringify(s)); }catch(e){} }
+function loadSavedInto(im, cb){ try{ const s=JSON.parse(localStorage.getItem(LS)||'{}'); const d=s[im.name]; if(d){ const t=new Image(); t.onload=()=>{ im.mask.getContext('2d').drawImage(t,0,0); cb&&cb(); }; t.src=d; return; } }catch(e){} cb&&cb(); }
+
+document.getElementById('file').addEventListener('change', async e=>{
+  const files=[...e.target.files].sort((a,b)=>a.name.localeCompare(b.name));
+  imgs=[];
+  for(const f of files){
+    const bmp=await createImageBitmap(f);
+    const mask=document.createElement('canvas'); mask.width=bmp.width; mask.height=bmp.height;
+    const im={name:f.name.replace(/\.(jpg|jpeg)$/i,'.png'), bitmap:bmp, w:bmp.width, h:bmp.height, mask, undo:[]};
+    imgs.push(im);
+  }
+  idx=0; if(imgs.length){ loadSavedInto(imgs[0], render); } updateStatus();
+});
+
+function setTool(t){ tool=t; if(t==='iris'||t==='sclera') fillColor=t;
+  for(const [id,tt] of [['irisBtn','iris'],['scleraBtn','sclera'],['eraseBtn','erase'],['fillBtn','fill']]) document.getElementById(id).classList.toggle('active', tt===t); }
+document.getElementById('irisBtn').onclick=()=>setTool('iris');
+document.getElementById('scleraBtn').onclick=()=>setTool('sclera');
+document.getElementById('eraseBtn').onclick=()=>setTool('erase');
+document.getElementById('fillBtn').onclick=()=>setTool('fill');
+document.getElementById('size').oninput=e=>{ brush=+e.target.value; document.getElementById('sizeVal').textContent=brush; };
+document.getElementById('alpha').oninput=e=>{ alpha=e.target.value/100; render(); };
+document.getElementById('undo').onclick=doUndo;
+document.getElementById('clear').onclick=()=>{ if(!imgs.length) return; pushUndo(); const m=imgs[idx].mask.getContext('2d'); m.clearRect(0,0,imgs[idx].w,imgs[idx].h); saveMask(idx); render(); };
+document.getElementById('prev').onclick=()=>go(-1);
+document.getElementById('next').onclick=()=>go(1);
+document.getElementById('export').onclick=exportZip;
+
+function go(d){ if(!imgs.length) return; saveMask(idx); idx=(idx+d+imgs.length)%imgs.length; imgs[idx].undo=[]; render(); updateStatus(); }
+
+function pushUndo(){ const im=imgs[idx]; im.undo.push(im.mask.getContext('2d').getImageData(0,0,im.w,im.h)); if(im.undo.length>12) im.undo.shift(); }
+function doUndo(){ if(!imgs.length) return; const im=imgs[idx]; if(!im.undo.length) return; im.mask.getContext('2d').putImageData(im.undo.pop(),0,0); saveMask(idx); render(); }
+
+function paintAt(x,y,x2,y2){ const m=imgs[idx].mask.getContext('2d');
+  m.lineCap='round'; m.lineJoin='round'; m.lineWidth=brush*2;
+  if(tool==='erase'){ m.globalCompositeOperation='destination-out'; m.strokeStyle='rgba(0,0,0,1)'; }
+  else { m.globalCompositeOperation='source-over'; const c=tool==='iris'?IRIS:SCLERA; m.strokeStyle=`rgb(${c[0]},${c[1]},${c[2]})`; }
+  m.beginPath(); m.moveTo(x,y); m.lineTo(x2,y2); m.stroke();
+  m.globalCompositeOperation='source-over';
+}
+
+function floodFill(px,py){ const im=imgs[idx]; const ctx=im.mask.getContext('2d'); const w=im.w, h=im.h;
+  px=Math.floor(px); py=Math.floor(py); if(px<0||py<0||px>=w||py>=h) return;
+  const img=ctx.getImageData(0,0,w,h), d=img.data;
+  const c=fillColor==='iris'?IRIS:SCLERA;
+  const startIdx=(py*w+px)*4;
+  const tr=d[startIdx], tg=d[startIdx+1], tb=d[startIdx+2], ta=d[startIdx+3];
+  if(ta>10 && tr===c[0] && tg===c[1] && tb===c[2]) return; // already filled with this color
+  const tol=24;
+  const matches=i=>Math.abs(d[i]-tr)<=tol && Math.abs(d[i+1]-tg)<=tol && Math.abs(d[i+2]-tb)<=tol && Math.abs(d[i+3]-ta)<=tol;
+  const stack=[[px,py]]; const seen=new Uint8Array(w*h);
+  while(stack.length){ const [x,y]=stack.pop(); if(x<0||y<0||x>=w||y>=h) continue;
+    const p=y*w+x; if(seen[p]) continue; const i=p*4; if(!matches(i)) continue;
+    seen[p]=1; d[i]=c[0]; d[i+1]=c[1]; d[i+2]=c[2]; d[i+3]=255;
+    stack.push([x+1,y],[x-1,y],[x,y+1],[x,y-1]); }
+  ctx.putImageData(img,0,0);
+}
+function evtPos(e){ const r=view.getBoundingClientRect(); const sx=imgs[idx].w/r.width, sy=imgs[idx].h/r.height;
+  return [(e.clientX-r.left)*sx, (e.clientY-r.top)*sy]; }
+view.addEventListener('pointerdown', e=>{ if(!imgs.length) return; view.setPointerCapture(e.pointerId);
+  if(tool==='fill'){ pushUndo(); const [x,y]=evtPos(e); floodFill(x,y); saveMask(idx); render(); return; }
+  pushUndo(); drawing=true; const [x,y]=evtPos(e); last=[x,y]; paintAt(x,y,x,y); render(); });
+view.addEventListener('pointermove', e=>{ if(!drawing) return; const [x,y]=evtPos(e); paintAt(last[0],last[1],x,y); last=[x,y]; render(); });
+view.addEventListener('pointerup', e=>{ if(!drawing) return; drawing=false; saveMask(idx); });
+view.addEventListener('pointerleave', ()=>{ if(drawing){ drawing=false; saveMask(idx); } });
+
+window.addEventListener('keydown', e=>{
+  if(e.key==='i'||e.key==='I') setTool('iris');
+  else if(e.key==='s'||e.key==='S') setTool('sclera');
+  else if(e.key==='e'||e.key==='E') setTool('erase');
+  else if(e.key==='f'||e.key==='F') setTool('fill');
+  else if(e.key===']'){ brush=Math.min(80,brush+3); document.getElementById('size').value=brush; document.getElementById('sizeVal').textContent=brush; }
+  else if(e.key==='['){ brush=Math.max(3,brush-3); document.getElementById('size').value=brush; document.getElementById('sizeVal').textContent=brush; }
+  else if((e.key==='z'||e.key==='Z')) doUndo();
+  else if(e.key==='ArrowRight') go(1);
+  else if(e.key==='ArrowLeft') go(-1);
+});
+
+function render(){ if(!imgs.length){ vctx.clearRect(0,0,view.width,view.height); return; } const im=imgs[idx];
+  view.width=im.w; view.height=im.h; vctx.clearRect(0,0,im.w,im.h);
+  vctx.drawImage(im.bitmap,0,0);
+  vctx.globalAlpha=alpha; vctx.drawImage(im.mask,0,0); vctx.globalAlpha=1;
+}
+function painted(im){ const c=im.mask.getContext('2d').getImageData(0,0,im.w,im.h).data; for(let i=3;i<c.length;i+=4) if(c[i]>10) return true; return false; }
+function updateStatus(){ if(!imgs.length){ document.getElementById('status').textContent='no images'; return; }
+  const done=imgs.filter(painted).length; document.getElementById('status').textContent=`${imgs[idx].name}   (${idx+1}/${imgs.length}, painted ${done})`; }
+setInterval(updateStatus, 1200);
+
+// ---- export: build a pure red/blue-on-black mask PNG per painted image, zip them (store method) ----
+const crcTable=(()=>{let c,t=[];for(let n=0;n<256;n++){c=n;for(let k=0;k<8;k++)c=(c&1)?(0xEDB88320^(c>>>1)):(c>>>1);t[n]=c>>>0;}return t;})();
+function crc32(b){let c=0xFFFFFFFF;for(let i=0;i<b.length;i++)c=crcTable[(c^b[i])&0xFF]^(c>>>8);return (c^0xFFFFFFFF)>>>0;}
+function u16(n){return [n&255,(n>>8)&255];} function u32(n){return [n&255,(n>>8)&255,(n>>16)&255,(n>>24)&255];}
+async function maskPngBytes(im){ const c=document.createElement('canvas'); c.width=im.w; c.height=im.h; const x=c.getContext('2d');
+  x.fillStyle='#000'; x.fillRect(0,0,im.w,im.h); const md=im.mask.getContext('2d').getImageData(0,0,im.w,im.h);
+  const out=x.getImageData(0,0,im.w,im.h); const s=md.data, o=out.data;
+  for(let i=0;i<s.length;i+=4){ if(s[i+3]>10){ const r=s[i],g=s[i+1],b=s[i+2];
+      if(r>b){ o[i]=255; o[i+1]=0; o[i+2]=0; } else { o[i]=0; o[i+1]=0; o[i+2]=255; } } }
+  x.putImageData(out,0,0);
+  const blob=await new Promise(res=>c.toBlob(res,'image/png')); return new Uint8Array(await blob.arrayBuffer());
+}
+async function exportZip(){ if(!imgs.length){ alert('Load images first.'); return; }
+  const files=[]; for(const im of imgs){ if(painted(im)) files.push({name:im.name, data:await maskPngBytes(im)}); }
+  if(!files.length){ alert('Nothing painted yet.'); return; }
+  let local=[], central=[], offset=0;
+  for(const f of files){ const name=[...new TextEncoder().encode(f.name)]; const crc=crc32(f.data); const sz=f.data.length;
+    const lh=[...u32(0x04034b50),...u16(20),...u16(0),...u16(0),...u16(0),...u16(0),...u32(crc),...u32(sz),...u32(sz),...u16(name.length),...u16(0),...name,...f.data];
+    local.push(lh);
+    central.push([...u32(0x02014b50),...u16(20),...u16(20),...u16(0),...u16(0),...u16(0),...u16(0),...u32(crc),...u32(sz),...u32(sz),...u16(name.length),...u16(0),...u16(0),...u16(0),...u16(0),...u32(0),...u32(offset),...name]);
+    offset+=lh.length; }
+  const cdStart=offset; let cd=[]; central.forEach(c=>cd.push(...c)); const cdLen=cd.length;
+  const end=[...u32(0x06054b50),...u16(0),...u16(0),...u16(files.length),...u16(files.length),...u32(cdLen),...u32(cdStart),...u16(0)];
+  let all=[]; local.forEach(l=>all.push(...l)); all.push(...cd); all.push(...end);
+  const blob=new Blob([new Uint8Array(all)],{type:'application/zip'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='RIT_masks.zip'; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+}
+setTool('iris');
+</script>
+</body>
+</html>

@@ -195,6 +195,36 @@ target the revised `fit_iris` must reproduce. f378 = "terrible", f382-L = bad, f
 
 ---
 
+## Eyeball-projection model + hatch rule (Dr. Kothari diagram, 2026-06-30)
+
+Dr. K's hand diagram (FRONT / SIDE / VP=extreme) fixes the iris-shape geometry definitively:
+
+- **The iris is a flat disc on the eyeball sphere.** Its image shape is the disc projected.
+- **FRONT gaze → circle.** **SIDE → foreshortened oval.** **VP (extreme side) → thin oval at the orbit
+  edge.** "OVAL when it goes to the extreme side."
+- **The oval foreshortens ALONG the gaze direction and stays full diameter PERPENDICULAR to it**, so the
+  long (major) axis is perpendicular to gaze and the oval **TILTS** as gaze goes oblique: look right →
+  tall vertical oval; look down-and-right → oval tilts along that diagonal; look up → tilts up.
+- **Use the visible dark bordered by white to complete the (dotted) imagined circle** — the "Track"
+  sketches show the visible dark arc + a dotted completion of the full iris.
+
+**Implemented in `fit_iris` (probe), 2026-06-30:** gaze vector = (iris centre − orbit centroid); major
+axis = held diameter ⟂ gaze; minor = D·cos(gaze), with cos from the displacement magnitude
+(sin = |g|/R_eb, R_eb ≈ 1.9·iris-radius) — NOT measured from the dark width (which the canthus shadow
+inflates); tilt = ⟂ to gaze. This replaced earlier horizontal-oval / circle / vertical-only fits.
+
+**Hatch rule (verification, rule #2):** the detector must **hatch-shade the exact region it calls iris**
+on the overlay, so the *region* (not just the outline) is judged. The hatch must contain **only dark iris
+bordered by white sclera** (sometimes brown lid skin); never canthus shadow, sclera, or skin. The clean,
+reliable signal is **dark-surrounded-by-white** — anchor on that and complete the circle/oval from it.
+Implemented: diagonal hatch over the selected dark component in `iris_in_orbit_overlay.mp4`.
+
+**Open calibration (awaiting Dr. K review of `~/Desktop/RIT_compare`):** (a) foreshortening amount (R_eb);
+(b) tilt magnitude; (c) segmentation — where the hatch grabs shadow or misses dark. The hatch separates
+the two knobs: fix *segmentation* (what is iris) vs *geometry* (oval shape).
+
+---
+
 ## Status
 
 Spec only. Pairs with the **RIT Orbit Lock** probe (validated 2026-06-30: the moving sclera oval stays

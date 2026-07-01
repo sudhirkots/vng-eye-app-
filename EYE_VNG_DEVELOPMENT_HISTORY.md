@@ -2177,3 +2177,110 @@ Until those eight checks pass on the vestibular-neuritis clip the work is not
 ready to commit.
 
 ---
+
+## 24. RIT iris detection: why we are moving from rule-tuning to ground truth (2026-07-01)
+
+We are currently trying to detect the iris, sclera, and eyelid opening using a classical OpenCV /
+rule-based detector. The current rule-based approach tries to use hand-written image logic:
+
+- detect the almond-shaped eye opening,
+- detect the white/pink sclera,
+- treat iris + sclera as filling the almond,
+- define iris as the dark remainder after sclera is removed,
+- remove lashes and lid shadows,
+- fit an ellipse/circle to the iris,
+- allow foreshortened oval shapes during side gaze,
+- keep everything inside the almond,
+- use sclera–limbus contact to distinguish iris from lashes or skin folds.
+
+This approach has produced important insights and some real breakthroughs. In particular, we learned that
+the iris should not be treated as a generic dark blob. A true iris candidate is the dark region that
+anatomically belongs inside the eye opening and is related to scleral white. The sclera and iris must be
+interpreted together, not separately.
+
+However, we are now encountering the limits of rule-tuning. Claude/OpenCV can implement pixel rules, but it
+does not truly "understand" the clinical concepts of almond, sclera, iris, lashes, lid margin, or
+foreshortened limbus in the way the clinician does. Each new difficult frame creates a new exception:
+eyelash shadows, brow/lid artifacts, partial iris, extreme medial gaze, reflections, pink sclera,
+capillaries, skin reflections, and eyelid occlusion. The risk is that we keep fixing one frame and breaking
+another. Frame-by-frame visual inspection is useful, but it is not enough as the primary development method.
+
+Therefore, the next methodological shift is:
+
+```
+Stop only adding more rules.
+Create ground truth.
+```
+
+The clinician can identify the iris, sclera, and almond reliably by eye. The software should now be judged
+against the clinician's markings rather than against Claude's visual guess from overlays.
+
+The problem should be reframed as eye-region segmentation:
+
+```
+Inside the moving almond / eye-opening:
+1. iris / dark region
+2. sclera / light-pink-white region
+3. outside / eyelid / skin / lashes / ignore
+```
+
+The next workflow should be:
+
+1. Select a small but difficult gold-standard set of approximately 30–50 frames.
+2. Include full iris, partial iris, extreme medial gaze, foreshortened slivers, eyelid shadow, lashes, brow
+   artifact, gap frames, and good frames.
+3. The clinician manually marks: almond / eye-opening mask, sclera mask, iris mask.
+4. Save these as masks or polygon annotations.
+5. Build an evaluator that compares the OpenCV detector output against the clinician's ground-truth masks.
+6. Measure: iris mask overlap, sclera mask overlap, almond mask overlap, iris centre error, whether
+   predicted iris lies outside almond, whether eyelid/skin/lashes were included, whether iris + sclera fill
+   the almond without gaps or outside spill.
+7. Improve the OpenCV detector against this fixed test set.
+8. If classical OpenCV cannot match the ground truth reliably, consider a small segmentation model or
+   semi-automatic segmentation approach using the same marked frames.
+
+This does not mean we are abandoning OpenCV immediately. The current plan is:
+
+```
+OpenCV detector + clinician-marked ground truth
+```
+
+The ground-truth set is needed regardless of the final method. If OpenCV succeeds against these markings, we
+continue with OpenCV. If OpenCV remains brittle, the same marked frames become the training/validation
+material for a segmentation-based method. The key reason for this shift is to stop subjective
+trial-and-error. Future detector changes should be judged against fixed clinician markings, not only by
+whether a single overlay looks better.
+
+### Practical next step to record
+
+Create a RIT ground-truth annotation workflow under:
+
+```
+outputs\nystagmus at rest to left in right vestibular neuritis_tracked\RIT_ground_truth\
+```
+
+For selected frames, save: raw frame, clean marking image, almond mask, sclera mask, iris mask, overlay
+preview. Then create an evaluator:
+
+```
+tools\rit_evaluate_iris_masks.py
+```
+
+The evaluator should compare current automatic detections with the clinician-marked ground truth and report
+objective errors.
+
+### Locked principle
+
+```
+Do not keep adding more OpenCV rules blindly.
+First create clinician-marked ground truth.
+Then judge every detector against that ground truth.
+```
+
+*(Implementation status 2026-07-01: the annotation workflow and evaluator described above have been built —
+`tools/rit_make_ground_truth_frames.py`, `tools/rit_extract_ground_truth.py`,
+`tools/rit_evaluate_iris_masks.py` — with 38 per-eye frames staged in `RIT_ground_truth/to_mark/` awaiting
+the clinician's marks. Rationale and roadmap also in `docs/RIT_STRATEGY_AND_ROADMAP.md`. Detector logic and
+thresholds unchanged; nothing committed.)*
+
+---

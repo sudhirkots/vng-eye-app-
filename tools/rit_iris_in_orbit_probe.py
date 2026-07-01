@@ -106,10 +106,16 @@ def fit_iris(gray, bgr, poly, seed, held_r):
         sclera = (inside & (gray > float(np.percentile(vin, 75)))).astype(np.uint8) * 255
         darkthr = float(np.percentile(vin, 35))
         dark = (inside & (gray < darkthr)).astype(np.uint8) * 255
+    sclera = cv2.morphologyEx(sclera, cv2.MORPH_OPEN, _kk(held_r * 0.10))  # kill specular specks
+    # THE IRIS IS DARK *ADJACENT TO WHITE* (Dr. K). Keep only dark within ~1 iris-diameter of the sclera;
+    # this deletes the dark EYEBROW / upper-lid skin (far from any white) that otherwise merges with the
+    # iris into one blob and drags the centre onto the lid -- the systematic left-eye failure.
+    near_white = cv2.dilate(sclera, _kk(held_r * 1.3))
+    dark = cv2.bitwise_and(dark, near_white)
+    darkmask0 = dark > 0                                     # raw dark-not-white pixels -> clips the hatch
     dark = cv2.morphologyEx(dark, cv2.MORPH_OPEN, _kk(held_r * 0.20))   # detach thin lashes
     dark = cv2.morphologyEx(dark, cv2.MORPH_CLOSE, _kk(held_r * 0.12))  # fill specular holes in the iris
-    sclera = cv2.morphologyEx(sclera, cv2.MORPH_OPEN, _kk(held_r * 0.10))  # kill specular specks ON the
-    scl_dil = cv2.dilate(sclera, _kk(held_r * 0.18))                       #   iris that fake a limbus
+    scl_dil = cv2.dilate(sclera, _kk(held_r * 0.15))
     n, lab, st, cen = cv2.connectedComponentsWithStats(dark)
     amin = 0.02 * np.pi * held_r * held_r
     best = None
@@ -118,11 +124,13 @@ def fit_iris(gray, bgr, poly, seed, held_r):
             continue
         comp = (lab == i).astype(np.uint8)
         edge = cv2.morphologyEx(comp * 255, cv2.MORPH_GRADIENT, _kk(3))
-        touches = int(((edge > 0) & (scl_dil > 0)).sum())     # does this dark region border the sclera?
-        if touches < 4:                                       # iris borders sclera; lash/shadow does not
+        peri = int((edge > 0).sum())
+        touches = int(((edge > 0) & (scl_dil > 0)).sum())     # boundary pixels bordering white sclera
+        frac = touches / max(1, peri)                         # IRIS is well bordered by white; brow/lid is not
+        if touches < 4:                                       # must border white at all ('surrounded by white')
             continue
-        d = (cen[i][0] - seed[0]) ** 2 + (cen[i][1] - seed[1]) ** 2
-        score = touches - 0.002 * d
+        dist = float(((cen[i][0] - seed[0]) ** 2 + (cen[i][1] - seed[1]) ** 2) ** 0.5)
+        score = frac - 0.0008 * dist                          # RANK by white-borderedness (iris beats brow)
         if best is None or score > best[0]:
             best = (score, i)
     if best is None:
@@ -131,34 +139,42 @@ def fit_iris(gray, bgr, poly, seed, held_r):
     comp = (lab == i).astype(np.uint8)
     ys, xs = np.where(comp > 0)
     cx = float(np.median(xs)); cy = float(np.median(ys))      # CENTRE = dark centroid -> always in the dark
-    a = 0.5 * D                                              # a = held vertical semi-axis (major axis)
-    tilt = 0.0
-    # LIMBUS = the dark-iris boundary that BORDERS the sclera -- the 'solid' convex arc Dr. K draws. Use it
-    # ONLY to size the (foreshortened) WIDTH: at the waist, |limbus - centre| = the minor semi-axis b.
-    edge = cv2.morphologyEx(comp * 255, cv2.MORPH_GRADIENT, _kk(3))
-    ly, lx = np.where((edge > 0) & (scl_dil > 0))
-    if lx.size >= 10:
-        u = np.sqrt(np.clip(1.0 - ((ly - cy) / a) ** 2, 0.0, 1.0))   # ellipse profile: x-offset = b*u
-        uu = u > 0.30                                        # waist-ish points give a stable b = |dx|/u
-        if int(uu.sum()) >= 6:
-            b = float(np.median(np.abs(lx[uu] - cx) / u[uu]))
-        else:
-            b = float(np.median(np.abs(lx - cx)))
-        width_h = float(np.clip(2.0 * b, 0.16 * D, D))       # thinner the more the eye is turned
-    else:                                                    # too little limbus -> waist-width fallback
-        band = np.abs(ys - cy) <= 0.20 * D
-        xb = xs[band] if int(band.sum()) >= 8 else xs
-        width_h = float(np.clip(np.percentile(xb, 95) - np.percentile(xb, 5), 0.16 * D, D))
-    height_v = D
-    # ellipse tuple = ((cx,cy),(MA=horizontal, ma=vertical), angle) -> drawn as a VERTICAL-major ellipse
-    ell = ((cx, cy), (width_h, height_v), tilt)
-    roundness = float(width_h / height_v)                     # ~1 at front gaze, small at extreme gaze
+    # GAZE/EYEBALL model (Dr. Kothari, 2026-06-30): the iris is a disc on the eyeball. Gaze direction =
+    # from the eye-opening centre (orbit centroid) to the iris centre. The disc FORESHORTENS ALONG the
+    # gaze direction (minor axis) and stays FULL DIAMETER PERPENDICULAR to it (major axis) -- so the oval
+    # TILTS with gaze and gets thinner the more the eye turns; a circle only at front gaze.
+    oc = poly.reshape(-1, 2).mean(axis=0)
+    gx = cx - float(oc[0]); gy = cy - float(oc[1])
+    gmag = float(np.hypot(gx, gy))
+    if gmag < 1e-3:
+        g_hat = np.array([1.0, 0.0]); perp = np.array([0.0, 1.0])
+    else:
+        g_hat = np.array([gx / gmag, gy / gmag])             # along gaze   = minor (foreshortened) axis
+        perp = np.array([-g_hat[1], g_hat[0]])               # perpendicular = major (full) axis
+    # Foreshortening from GEOMETRY, not from the (shadow-contaminated) dark width: the iris centre is
+    # displaced from the eyeball centre by R_eb*sin(gaze); so sin = |g|/R_eb and the minor axis =
+    # D*cos(gaze). Robust to the canthus shadow that inflates any direct width measurement.
+    R_eb = 1.9 * held_r                                      # eyeball radius in image ~1.9x iris radius
+    sin_g = min(0.985, gmag / R_eb)
+    k = float(np.sqrt(max(0.0, 1.0 - sin_g * sin_g)))        # cos(gaze) = foreshortening factor
+    minor = float(np.clip(D * k, 0.16 * D, D))
+    major = D                                                # full diameter (perpendicular to gaze), held
+    tilt = float(np.degrees(np.arctan2(perp[1], perp[0])))   # orientation of the MAJOR axis
+    # ell = ((cx,cy),(MA along tilt, ma perp-to-tilt), tilt): MA=major(perp-to-gaze), ma=minor(along gaze)
+    ell = ((cx, cy), (major, minor), tilt)
+    roundness = float(minor / major)                         # ~1 at front gaze, small at extreme gaze
     r_out = held_r                                            # iris does NOT shrink -> hold the diameter
     area = float(st[i, cv2.CC_STAT_AREA])
     cov = min(1.0, area / (np.pi * held_r * held_r))
+    # HATCH = the OVAL itself, clipped to dark-not-white: fill the ellipse, keep only the dark pixels, so
+    # the hatch shape IS the iris shape and its margin against the sclera shows white immediately.
+    hatch = np.zeros((H, W), np.uint8)
+    cv2.ellipse(hatch, (int(round(cx)), int(round(cy))),
+                (max(1, int(major / 2)), max(1, int(minor / 2))), tilt, 0, 360, 255, -1)
+    hatch_mask = ((hatch > 0) & darkmask0).astype(np.uint8)
     return SimpleNamespace(cx=cx, cy=cy, r=float(r_out), ellipse=ell,
                            arc_coverage=float(cov), arc_pts=None, n_inliers=int(area),
-                           roundness=roundness, comp=comp)
+                           roundness=roundness, comp=hatch_mask)
 
 GREEN = (0, 200, 0); YELLOW = (0, 255, 255); AMBER = (0, 165, 255); RED = (0, 0, 255); CYAN = (255, 255, 0)
 REP = {187, 188, 192, 195, 227, 262, 267, 269, 311, 341, 348, 350, 353, 378, 379, 382, 393, 438, 460, 463, 469, 475}
@@ -168,6 +184,15 @@ W = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)); H = int(cap.get(cv2.CAP_PROP_FRAME_H
 fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
 ds = min(1.0, 1280.0 / max(1, W)); ow, oh = int(W * ds), int(H * ds)
 writer = cv2.VideoWriter(str(REV / "iris_in_orbit_overlay.mp4"), cv2.VideoWriter_fourcc(*"mp4v"), fps, (ow, oh))
+
+# diagonal HATCH pattern -> shade the exact pixels the detector calls 'iris', so the region (not just the
+# outline) can be judged: it must be dark iris bordered by white sclera, never shadow/skin (Dr. K rule).
+_yy, _xx = np.indices((oh, ow))
+HATCH = (((_xx + _yy) % 7) < 2)
+def hatch_region(disp, comp_full, color):
+    ch = cv2.resize(comp_full, (ow, oh), interpolation=cv2.INTER_NEAREST)
+    sel = (ch > 0) & HATCH
+    disp[sel] = (0.40 * disp[sel] + 0.60 * np.array(color, np.float32)).astype(np.uint8)
 
 run_R = {ek: iris0.get(ek, (0, 0, 30))[2] for ek in ("L", "R")}
 last_good = {ek: None for ek in ("L", "R")}
@@ -213,6 +238,8 @@ while fn < NF:
             last_good[ek] = (fit.cx, fit.cy)
             col = YELLOW if kind == "free" else AMBER
             ctr = (int(fit.cx * ds), int(fit.cy * ds))
+            if fit.comp is not None:
+                hatch_region(disp, fit.comp, col)             # shade what the detector calls iris
             if fit.ellipse is not None:
                 (ecx, ecy), (MA, ma), ang = fit.ellipse
                 cv2.ellipse(disp, (int(ecx * ds), int(ecy * ds)), (int(MA * ds / 2), int(ma * ds / 2)),
