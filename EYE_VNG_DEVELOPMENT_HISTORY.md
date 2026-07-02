@@ -2284,3 +2284,22 @@ the clinician's marks. Rationale and roadmap also in `docs/RIT_STRATEGY_AND_ROAD
 thresholds unchanged; nothing committed.)*
 
 ---
+
+## 25. Trying the four learning approaches — pretrained eye nets (2026-07-02)
+
+With ~39 vestibular + 52 pontine clinician-marked frames and a workbench, the four candidate approaches were
+framed: **SAM 2** (Meta), **pretrained eye nets** (RITnet / EllSeg / DeepVOG), **classical geometry**, and a
+**centre-correction loop** — under two reframes: optimise the **iris-centre trace** (not mask IoU) and learn
+**geometry/motion** (not appearance). Motivation: the colour-feature learned segmenter (ExtraTrees, iris IoU
+0.81 on vestibular) **failed to transfer** to the monochrome pontine clip (position features carried it).
+
+Evaluated **approach #2 zero-shot**: **RITnet FAILS** on visible-light face crops (classes land on skin;
+iris IoU ~0.0–0.27) — trained on near-IR headset close-ups, too far a domain. **EllSeg (the multi-dataset
+"all" model) is PROMISING** — on clean full-iris frames it reaches **disc IoU 0.75–0.80 zero-shot, matching
+the trained colour model with no training on our data**, and it emits an iris ellipse (centre) directly. It
+degrades on partial gaze / blink (over-segments onto canthal skin) — the frames the orbit lock can constrain.
+Full write-up + reproduction in `HANDOFF_RIT_NETS_EVAL.md`; runners `tools/rit_ritnet_smoke.py`,
+`tools/rit_ellseg_smoke.py`; nets stack lives off-OneDrive in `C:\Users\Dr.Sudhir\rit-nets\`. Nothing wired
+into clinical RIT.
+
+---
