@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RIT Orbit Lock marker (3-point oval)</title>
+<style>
+  :root { --bg:#111; --panel:#1b1b1b; --ink:#eee; --R:#19d3ff; --L:#ff9a3c; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:Segoe UI, system-ui, sans-serif; background:var(--bg); color:var(--ink);
+         user-select:none; -webkit-user-select:none; touch-action:none; }
+  #bar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:8px 10px; background:var(--panel);
+         position:sticky; top:0; border-bottom:1px solid #333; z-index:5; }
+  button, label.btn { background:#2a2a2a; color:var(--ink); border:1px solid #444; border-radius:6px;
+         padding:7px 11px; font-size:14px; cursor:pointer; }
+  button.active { outline:2px solid #fff; }
+  #eyeR.active { background:#0b4b5e; } #eyeL.active { background:#5e3410; }
+  .pt.active { background:#333; outline:2px solid #fff; }
+  #wrap { display:flex; justify-content:center; padding:10px; }
+  canvas { background:#000; max-width:98vw; touch-action:none; box-shadow:0 0 0 1px #333; cursor:crosshair; }
+  #status { font-size:13px; opacity:.9; }
+  .sep { width:1px; height:26px; background:#3a3a3a; margin:0 2px; }
+  #hint { padding:2px 12px 10px; font-size:12.5px; opacity:.8; line-height:1.5; }
+  b.R { color:var(--R); } b.L { color:var(--L); }
+</style>
+</head>
+<body>
+<div id="bar">
+  <label class="btn">📂 Load first-frames<input id="file" type="file" accept="image/png,image/jpeg" multiple hidden></label>
+  <span class="sep"></span>
+  <span>eye:</span>
+  <button id="eyeR" class="active">● Right (image-left)</button>
+  <button id="eyeL">● Left (image-right)</button>
+  <span class="sep"></span>
+  <span>point:</span>
+  <button class="pt active" data-slot="inner">1 Medial canthus</button>
+  <button class="pt" data-slot="outer">2 Lateral canthus</button>
+  <button class="pt" data-slot="top">3 Top</button>
+  <span class="sep"></span>
+  <button id="undo">↶ Undo</button>
+  <button id="clearEye">Clear this eye</button>
+  <span class="sep"></span>
+  <button id="prev">◀ Prev</button>
+  <span id="status">no images</span>
+  <button id="next">Next ▶</button>
+  <span class="sep"></span>
+  <button id="export">⬇ Download orbit_lock.json</button>
+</div>
+<div id="wrap"><canvas id="view"></canvas></div>
+<div id="hint">
+  Per eye, click <b>3 points</b>: <b>1</b> medial (nasal) canthus, <b>2</b> lateral (temporal) canthus,
+  <b>3</b> top of the eye-opening. The canthi line is <b>horizontal</b>; the <b>bottom is set automatically</b>
+  as the mirror of the top across it, so the vertical is always a true <b>right angle</b>. Point auto-advances;
+  click a point button to redo just that one. Do <b class="R">Right</b> then <b class="L">Left</b>.
+  Keys: <b>R</b>/<b>L</b> eye, <b>1–3</b> point, <b>Z</b> undo, <b>← →</b> image.
+  Autosaves in this browser; click <b>Download orbit_lock.json</b> when all videos are done.
+</div>
+
+<script>
+const LS = 'rit_orbit_lock_oval_v2';
+const SLOTS = ['inner','outer','top'];
+let imgs = [];       // {name, bitmap, w, h}
+let idx = 0, eye = 'R', slot = 'inner';
+// data[name] = { R:{inner,outer,top}, L:{...} }  each point [x,y] or null
+let data = {};
+const view = document.getElementById('view'), vctx = view.getContext('2d');
+
+function blankEye(){ return { inner:null, outer:null, top:null }; }
+function ensure(name){ if(!data[name]) data[name] = { R: blankEye(), L: blankEye() }; return data[name]; }
+function cur(){ return imgs.length ? ensure(imgs[idx].name)[eye] : null; }
+function save(){ try{ localStorage.setItem(LS, JSON.stringify(data)); }catch(e){} }
+function load(){ try{ data = JSON.parse(localStorage.getItem(LS)||'{}'); }catch(e){ data = {}; } }
+load();
+
+document.getElementById('file').addEventListener('change', async e=>{
+  const files = [...e.target.files].sort((a,b)=>a.name.localeCompare(b.name));
+  imgs = [];
+  for(const f of files){
+    const bmp = await createImageBitmap(f);
+    imgs.push({ name: f.name.replace(/\.(jpg|jpeg)$/i,'.png'), bitmap: bmp, w: bmp.width, h: bmp.height });
+  }
+  idx = 0; setSlot('inner'); render(); status();
+});
+
+function setEye(x){ eye = x; document.getElementById('eyeR').classList.toggle('active', x==='R');
+  document.getElementById('eyeL').classList.toggle('active', x==='L'); setSlot('inner'); render(); status(); }
+function setSlot(s){ slot = s; document.querySelectorAll('.pt').forEach(b=>b.classList.toggle('active', b.dataset.slot===s)); status(); }
+document.getElementById('eyeR').onclick = ()=>setEye('R');
+document.getElementById('eyeL').onclick = ()=>setEye('L');
+document.querySelectorAll('.pt').forEach(b=> b.onclick = ()=>setSlot(b.dataset.slot));
+document.getElementById('undo').onclick = undo;
+document.getElementById('clearEye').onclick = ()=>{ if(!imgs.length) return; ensure(imgs[idx].name)[eye] = blankEye(); setSlot('inner'); save(); render(); };
+document.getElementById('prev').onclick = ()=>go(-1);
+document.getElementById('next').onclick = ()=>go(1);
+document.getElementById('export').onclick = exportJson;
+
+function go(d){ if(!imgs.length) return; idx = (idx+d+imgs.length)%imgs.length; setEye('R'); render(); status(); }
+
+function evtPos(e){ const r = view.getBoundingClientRect(); const sx = imgs[idx].w/r.width, sy = imgs[idx].h/r.height;
+  return [ Math.round((e.clientX-r.left)*sx), Math.round((e.clientY-r.top)*sy) ]; }
+
+view.addEventListener('pointerdown', e=>{ if(!imgs.length) return; const c = cur();
+  c[slot] = evtPos(e);
+  const i = SLOTS.indexOf(slot); if(i < SLOTS.length-1) setSlot(SLOTS[i+1]);   // auto-advance
+  save(); render(); status();
+});
+
+function undo(){ if(!imgs.length) return; const c = cur();
+  let s = slot; if(!c[s]){ const i = SLOTS.indexOf(slot); s = SLOTS[Math.max(0,i-1)]; }
+  c[s] = null; setSlot(s); save(); render(); status();
+}
+
+window.addEventListener('keydown', e=>{
+  if(e.key==='r'||e.key==='R') setEye('R');
+  else if(e.key==='l'||e.key==='L') setEye('L');
+  else if('123'.includes(e.key)) setSlot(SLOTS[+e.key-1]);
+  else if(e.key==='z'||e.key==='Z') undo();
+  else if(e.key==='ArrowRight') go(1);
+  else if(e.key==='ArrowLeft') go(-1);
+});
+
+// oval from 3 clicks. Horizontal axis = canthi line (centre = canthi midpoint). After the TOP click, drop a
+// perpendicular (right angle) from it onto that line; the BOTTOM marker is auto-placed as the mirror of the
+// top across the line (same point straight down). foot = where the drop crosses the canthi line.
+function oval(e){
+  if(!e.inner||!e.outer) return null;
+  const cx=(e.inner[0]+e.outer[0])/2, cy=(e.inner[1]+e.outer[1])/2;
+  const dx=e.outer[0]-e.inner[0], dy=e.outer[1]-e.inner[1];
+  const a=Math.hypot(dx,dy)/2, theta=Math.atan2(dy,dx);
+  const px=-Math.sin(theta), py=Math.cos(theta);          // unit perpendicular (vertical) direction
+  let b=a*0.5, foot=null, bottom=null;
+  if(e.top){
+    const d=(e.top[0]-cx)*px+(e.top[1]-cy)*py;             // signed perpendicular distance of top from line
+    b=Math.abs(d)||b;
+    foot=[e.top[0]-d*px, e.top[1]-d*py];                  // right-angle drop meets the canthi line here
+    bottom=[e.top[0]-2*d*px, e.top[1]-2*d*py];            // auto bottom = top mirrored across the line
+  }
+  return {cx,cy,a,b,theta,foot,bottom};
+}
+
+function drawEye(e, col){
+  const ov = oval(e);
+  if(ov){
+    vctx.beginPath(); vctx.ellipse(ov.cx, ov.cy, ov.a, ov.b, ov.theta, 0, 7);
+    vctx.fillStyle = col+'22'; vctx.strokeStyle = col; vctx.lineWidth = 3; vctx.fill(); vctx.stroke();
+    // horizontal (canthi) axis
+    vctx.beginPath(); vctx.moveTo(e.inner[0],e.inner[1]); vctx.lineTo(e.outer[0],e.outer[1]);
+    vctx.strokeStyle='#fff'; vctx.lineWidth=2; vctx.setLineDash([9,6]); vctx.stroke(); vctx.setLineDash([]);
+    // right-angle drop from the TOP click, through the canthi line (foot), to the auto BOTTOM marker
+    if(e.top && ov.bottom){
+      vctx.beginPath(); vctx.moveTo(e.top[0],e.top[1]); vctx.lineTo(ov.bottom[0],ov.bottom[1]);
+      vctx.setLineDash([4,5]); vctx.stroke(); vctx.setLineDash([]);
+      if(ov.foot){ vctx.fillStyle='#fff'; vctx.beginPath(); vctx.arc(ov.foot[0],ov.foot[1],3,0,7); vctx.fill(); }
+      const b=ov.bottom;
+      vctx.beginPath(); vctx.arc(b[0],b[1],8,0,7); vctx.fillStyle='#fff'; vctx.fill();
+      vctx.beginPath(); vctx.arc(b[0],b[1],5,0,7); vctx.fillStyle=col; vctx.fill();
+      vctx.fillStyle='#ffffffcc'; vctx.font='16px sans-serif'; vctx.fillText('bot (auto)', b[0]+11, b[1]+16);
+    }
+  }
+  const labels={inner:'med',outer:'lat',top:'top'};
+  for(const s of SLOTS){ const p=e[s]; if(!p) continue;
+    vctx.beginPath(); vctx.arc(p[0],p[1],8,0,7); vctx.fillStyle='#fff'; vctx.fill();
+    vctx.beginPath(); vctx.arc(p[0],p[1],5,0,7); vctx.fillStyle=col; vctx.fill();
+    vctx.fillStyle='#fff'; vctx.font='20px sans-serif'; vctx.fillText(labels[s], p[0]+11, p[1]-9); }
+}
+
+function render(){ if(!imgs.length){ vctx.clearRect(0,0,view.width,view.height); return; }
+  const im = imgs[idx]; view.width = im.w; view.height = im.h;
+  vctx.clearRect(0,0,im.w,im.h); vctx.drawImage(im.bitmap,0,0);
+  const d = ensure(im.name); drawEye(d.R, css('--R')); drawEye(d.L, css('--L'));
+}
+function css(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+
+function nset(e){ return SLOTS.filter(s=>e[s]).length; }
+function status(){ const s = document.getElementById('status');
+  if(!imgs.length){ s.textContent='no images'; return; }
+  const d = ensure(imgs[idx].name);
+  const done = imgs.filter(im=>{ const x=data[im.name]; return x && nset(x.R)===3 && nset(x.L)===3; }).length;
+  s.textContent = `${imgs[idx].name}  (${idx+1}/${imgs.length}, done ${done})  — ${eye}, next: ${slot}  |  R ${nset(d.R)}/3  L ${nset(d.L)}/3`;
+}
+setInterval(status, 1000);
+
+function exportJson(){
+  const out = {};
+  for(const name in data){ const d=data[name], rec={};
+    for(const e of ['R','L']){ const ed=d[e]; if(nset(ed)===3) rec[e]={inner:ed.inner,outer:ed.outer,top:ed.top}; }
+    if(Object.keys(rec).length) out[name]=rec; }
+  const blob = new Blob([JSON.stringify(out,null,1)], {type:'application/json'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download='orbit_lock.json'; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href), 4000);
+}
+setEye('R'); setSlot('inner');
+</script>
+</body>
+</html>

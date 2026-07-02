@@ -1,0 +1,11 @@
+{
+ "total_found": 52,
+ "total_valid": 52,
+ "excluded": [],
+ "malformed": [],
+ "left": 26,
+ "right": 26,
+ "max_iris_sclera_overlap_frac": 0.01,
+ "almond_equals_union": "by construction (union of iris+sclera) unless GREEN outline supplied",
+ "iris_sclera_disjoint": true
+}

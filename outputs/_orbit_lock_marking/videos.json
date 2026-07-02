@@ -1,0 +1,47 @@
+{
+ "1": {
+  "frames": 216,
+  "w": 2560,
+  "h": 1440
+ },
+ "2": {
+  "frames": 1801,
+  "w": 1920,
+  "h": 1080
+ },
+ "2_short15": {
+  "frames": 585,
+  "w": 1920,
+  "h": 1080
+ },
+ "3": {
+  "frames": 732,
+  "w": 1920,
+  "h": 1080
+ },
+ "fistula nystagmus": {
+  "frames": 1063,
+  "w": 1920,
+  "h": 1080
+ },
+ "gaze-evoked nystagmus in pontine glioma": {
+  "frames": 303,
+  "w": 1920,
+  "h": 1080
+ },
+ "gaze-evoked nystagmus-1": {
+  "frames": 194,
+  "w": 1920,
+  "h": 1080
+ },
+ "nystagmus at rest to left and head impulse positive in right vestibular neuritis": {
+  "frames": 385,
+  "w": 1920,
+  "h": 1080
+ },
+ "nystagmus at rest to left in right vestibular neuritis": {
+  "frames": 640,
+  "w": 1920,
+  "h": 1080
+ }
+}

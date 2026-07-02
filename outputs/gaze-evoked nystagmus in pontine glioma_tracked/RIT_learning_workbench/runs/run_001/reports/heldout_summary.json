@@ -1,0 +1,28 @@
+{
+ "n_units": 52,
+ "mean_iris_iou": 0.514,
+ "mean_sclera_iou": 0.604,
+ "mean_almond_iou": 0.661,
+ "mean_ctr_err_px": 34.44,
+ "mean_out_alm": 0.332,
+ "n_iris_outside_almond": 52,
+ "n_pass": 11,
+ "by_eye": {
+  "L": {
+   "n": 26,
+   "iris_iou": 0.462,
+   "sclera_iou": 0.565,
+   "almond_iou": 0.625,
+   "ctr_err_px": 39.931,
+   "n_pass": 1
+  },
+  "R": {
+   "n": 26,
+   "iris_iou": 0.566,
+   "sclera_iou": 0.643,
+   "almond_iou": 0.698,
+   "ctr_err_px": 28.95,
+   "n_pass": 10
+  }
+ }
+}
