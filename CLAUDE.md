@@ -35,6 +35,20 @@ ends it with "Let's end", from either machine.
 
 **Only "Let's end" authorizes committing/pushing.** At all other times, still no commit without an explicit OK.
 
+## Checkpoints — named locked stages (Dr. K, 2026-07-04)
+
+Each time a rule/stage is confirmed good, **lock it as a named checkpoint** (like clinical-trial phases), so
+if a later change makes things worse we can return to the last known-good stage without losing the reasoning.
+Mechanism = an **annotated git tag** `checkpoint/<short-name>` on the commit that locks the stage, pushed to
+GitHub (durable), + a matching commit message `Lock <rule name>`.
+
+- **Do NOT pre-name future checkpoints.** Name each one only when we actually reach and confirm that stage,
+  one by one, as the work reveals it.
+- Checkpoints locked so far:
+  - `checkpoint/ellseg-anchor` — **EllSeg Anchor Locked**: EllSeg locates the iris well enough; do NOT use its
+    jagged mask as the final mark (Step 1 = Location of Iris by EllSeg). *(= tag `iris-step1-ellseg-location`.)*
+- To return to a stage: `git fetch origin --tags` then `git checkout checkpoint/<name>`.
+
 ## Current direction (RIT = Rescue Iris Tracker)
 
 RIT = **orbit-marking method** (clinician draws the eye-opening oval with 3 clicks/eye on frame 1,
