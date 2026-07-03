@@ -181,3 +181,226 @@ Centre estimation from the completed circle is the later step; for now the *mark
 perpendicular to the gaze direction** (keeps the full iris width); the **SHORT axis = along the gaze direction**
 (compressed). Looking left → tall vertical oval; looking down-and-right → oval tilted so its long axis is
 perpendicular to that diagonal. Angulation follows gaze. (Foreshorten more the further the eye has turned.)
+
+### CONFIRMED iris rules (Dr. K, four Q&A, 2026-07-03) — the definitive spec
+**What the iris IS:**
+- **Shape:** a **circle** (front), an **oval** (side gaze), or **part of that shape** (arc/sector when the lid
+  covers it). **Nothing outside that round shape** counts — Q4: *strictly the round shape* (drop any dark that
+  isn't part of it: canthus, lash).
+- **Darkness:** the iris is **dark and contains nothing LIGHT — where "light" = sclera-bright.** The **mid-tone
+  rim** near the limbus is **still iris** (Q2: *include out to the limbus*). Not-all-dark-is-iris → shape decides.
+
+**What to MARK:**
+- **Extent (Q1): only what is SEEN.** Where the lid covers the iris, the mark **stops at the lid line** (an
+  arc/sector). Do NOT paint under the eyelid.
+- **Rim (Q2):** include the whole iris out to the limbus (the boundary with the white/pink sclera), even where
+  the rim is lighter than the centre.
+- **Catch-light (Q3): FILL IT IN.** The bright corneal reflection sits inside the iris shape → no hole in the
+  mark. (Only sclera-bright *outside* the shape is excluded.)
+- **Empty opening / no iris arc abutting sclera → mark NOTHING.**
+
+**HOW (procedure, maps to `tools/sudhirs_iris_sclera_almond_method.py`):**
+1. EllSeg → approximate location only.
+2. Sclera = uniform white/pink patch. Limbus = the smooth **convex arc** where dark iris meets sclera (RANSAC on
+   sclera-facing edge points; lid line & lashes are straight/ragged → excluded).
+3. **Complete the circle/oval** from that limbus arc (radius = known iris radius; long axis ⟂ gaze).
+4. **Clip to SEEN:** intersect the completed oval with the eye OPENING (`close(sclera∪dark)` minus sclera) →
+   cuts at the lid line, keeps the full iris incl. the mid-tone rim (opening bridges it), off the sclera.
+5. **Fill holes** (largest contour filled) → catch-light filled; nothing outside the oval.
+
+---
+
+# Sudhir_iris_method — CANONICAL rules (Dr. K, 2026-07-03)
+
+*This is the single source of truth; it supersedes the evolving sections above. "LSIG" (as Dr. K says it) =
+EllSeg, the pretrained locate-and-propose model. Implemented in `tools/sudhirs_iris_sclera_almond_method.py`.*
+
+## Pipeline
+- **Step 1 — Orbit Lock:** the clinician marks the orbit (the moving search frame).
+- **Step 2 — EllSeg (LSIG) locate:** inside the orbit, EllSeg locates the eye, finds the **sclera** and the
+  **convex limbus arc**, narrows the area, and proposes/fills what it thinks is the iris.
+- **Step 3 — apply the rules below to mark the visible iris.**
+
+## The rules
+1. **Shape is the law.** The iris mark can be **nothing except a circle, an oval, or a part of one.**
+2. **Circle → oval → sector with gaze.** Whole iris (front) = **circle**; to the side = **oval**; at the
+   extreme = only a **sector**.
+3. **Oval orientation.** The oval's **long (vertical) axis is PERPENDICULAR to the direction of gaze.** Looking
+   right → an upright/perpendicular oval; looking to the side **and down** → the long axis **tilts outward**
+   accordingly.
+4. **Lid cuts make sectors.** The eyelid cuts the circle/oval at various positions: a **central cut = "setting
+   sun"** (semicircle); a **cut toward the canthus = a "pizza-wedge" sector.**
+5. **Mark only what is SEEN.** The iris **under the eyelids is NOT marked**; the iris **behind the canthus is
+   NOT marked.**
+6. **The iris margin is circular/oval.** The visible iris's boundary against the sclera (the limbus) can be
+   **nothing but a circle / part of a circle / oval / part of an oval.** (The lid is where visibility ends,
+   not part of the iris circle.)
+7. **Dark, and darker than sclera.** The iris is **dark** — a little **less dark toward the limbus** but
+   **always darker than the sclera** (which is white or pink). The iris is always a different, darker colour.
+8. **Nothing white or pink inside the mark.** If in doubt, **follow the shape of the remaining clearly-dark
+   part** of the iris.
+9. **Dark ≠ iris.** Dark that is merely **contiguous** to the iris (canthus, under-lid shadow) is **excluded**
+   if it does not fit the shape. **SHAPE OVERRIDES COLOUR.**
+10. **Catch-light is filled.** The bright corneal reflection sits inside the iris shape → fill it, no hole
+    (only sclera-bright *outside* the shape is excluded).
+11. **Nothing there → mark NOTHING** (hidden / blink / no iris arc abutting sclera).
+
+## Corrections from the f330–341 review (Dr. K, 2026-07-03)
+12. **CONTINUITY RULE** (overrides rule 8's "nothing light"). Once a valid iris arc is found, **continue the
+    smooth circle/oval THROUGH any interruption.** A bright patch that falls **INSIDE** the completed circle/
+    oval is **overridden** — treated as iris (a reflection), not sclera; do not cut a notch at it. Bright is
+    only sclera when it lies **OUTSIDE** the completed shape. (This is why the *top* of the iris was left out
+    in almost every frame — the reflection near the limbus broke the completion.)
+
+*Naming convention (Dr. K): every rule gets a short descriptive NAME (e.g. "Continuity Rule") that states
+what it does. Named rules so far: Continuity Rule (#12), Almond-Containment Rule (#14), Canthus-Complete-Only
+Rule (#13). More to be named as we lock them.*
+13. **CANTHUS = complete only.** On the medial side use just **enough** of the dark to complete the circle/
+    oval; dark *beyond* the completed shape (canthus shadow) is **not iris — leave it out**, even though it
+    is dark. The shape bounds it. (f338 canthus side = the correct example.)
+14. **STAY INSIDE THE ALMOND.** First identify the **two eyelids and the sclera between them** = the opening,
+    and search **only** within that oval. **Never** mark on the eyelid, below the eyelid, or a stray dark
+    spot outside the opening — there is no round dark-abutting-sclera there (fixed #2/#4/#5, which jumped to
+    the lower lid).
+15. **Shape must be a true oval, not a blob.** e.g. f330 should be an oval whose long axis is ~20° off
+    vertical toward ~10 o'clock — not an enlarged blob from grabbing extra dark.
+16. **Almond-Context Rule** (fundamental, for Steps 2–4). EllSeg locates the iris well, but sclera-vs-dark
+    separation must be done over the **full eye-opening almond** — both eyelids, the visible sclera, the iris,
+    and the canthus boundary — **not** an iris-sized crop. **Never compute sclera from a disc-sized region**,
+    or the sclera detector is starved. (Diagnostic 2026-07-03: with a disc-sized context the sclera mask sat
+    on the iris and missed the real white sclera to the side.) EllSeg = locator only; analysis region = almond.
+
+## What raw EllSeg actually gives (whole-clip review, 2026-07-04)
+
+Ran raw EllSeg over the entire 640-frame clip (`tools/sudhir_ellseg_raw_video.py` → `ellseg_raw.mp4`),
+both eyes, **640/640 frames found**. Watching the raw disc alone, with no rules applied:
+
+- **EllSeg reliably LOCATES the iris — always.** Front-on, side gaze, even half-covered, the disc's
+  **centroid stays on the iris**. It never jumps to the canthus, the lid, or a stray dark spot. As a
+  **location anchor it is trustworthy the whole clip.**
+- **But its SHAPE keeps changing.** On open/forward frames the disc is a clean round patch the right
+  size. As the eye goes to the side — and especially **coming BACK from the side** — the disc collapses
+  to a **thin sliver / crescent**, small and irregular. It tracks only the *visible* dark iris, not the
+  full circle.
+- **Consequence — CENTRE JITTER.** Because the disc's shape (and area) changes frame to frame, the disc
+  *centroid* wobbles even when the true iris centre moves smoothly. The disc area also **under-estimates
+  the iris radius at side gaze** (a sliver has small area) — so its size cannot be trusted for the radius.
+- **Almost all the sclera lies OUTSIDE the disc** (the disc is just the iris) → confirms the
+  Almond-Context Rule: the sclera/almond search must be expanded *around* the anchor, not read from the disc.
+
+17. **Shape-Stabilization Rule** (Dr. K, 2026-07-04) — *the core of the next step.* EllSeg's **location is
+    good and continuous**; its **shape is not.** So **do not take EllSeg's disc shape as the iris.** Use
+    EllSeg only for the **centre anchor and region**, then **STABILIZE the iris shape** — a **fixed-radius
+    circle/oval** whose size does not shrink with the visible sliver — and **REFINE it by the anatomy**
+    (darkness, the smooth convex limbus arc/curves, almond = iris + sclera). The steady geometric shape,
+    not the flickering disc, is what fixes the centre jitter — especially when the eye is **returning from
+    a side gaze**. (Founding reframe restated: optimise the **iris-centre trace**, learn **geometry/motion**,
+    not the raw net's appearance.)
+
+18. **Fixed-Radius Foreshortening Rule** (Dr. K, 2026-07-04) — *the geometry that makes #17 concrete.* The
+    iris is a flat disc of **ONE fixed radius R**. Model it as a disc on a sphere seen in projection:
+    - **Lock R once.** As soon as EllSeg gives a clean **frontal circle**, fix R (e.g. the median iris
+      radius over the good open frames). **R never fluctuates afterward** — the *circle* size is constant
+      for the whole clip; only its projection changes.
+    - **Side gaze → oval, tied to R by ONE number.** At gaze angle **θ** off primary position, the iris
+      projects to an ellipse: **major axis = R** (**⟂ to the gaze direction — keeps the full iris width**),
+      **minor axis = R·cos θ** (**along the gaze direction — foreshortened**). The further to the side, the
+      larger θ, the smaller cos θ, the flatter the oval. "The radius gets smaller as it goes to the side"
+      means the **along-gaze (minor) radius shrinks; the cross-gaze (major) radius stays R.**
+    - **Give R the oval, not the circle.** The mark/limbus fit uses **(major=R, minor=R·cos θ, angle⟂gaze)**,
+      i.e. the **oval's radii**, never a plain circle of radius R at side gaze.
+    - **The oval is mathematically related to the fixed circle** by the single foreshortening ratio
+      **minor/major = cos θ** (0 = edge-on, 1 = frontal). So we estimate one scalar (θ, or the ratio) per
+      frame — from the gaze/centre displacement, with EllSeg's disc eccentricity only as a hint — and the
+      whole oval follows; R is not re-estimated.
+    - **Division of labour:** EllSeg supplies **tracking + location (centre, θ hint)**; the **anatomy rules**
+      (limbus arc, darkness, almond) **refine** the fit; **R is held fixed.** Anatomy modifies EllSeg's
+      proposal — it does not let the size drift.
+    - *TODO (rules to write): the exact θ→foreshortening schedule (how much it flattens per degree/pixel of
+      side travel), the θ estimator (gaze from centre offset vs. disc aspect), and how far anatomy may pull
+      the oval before the frame is flagged needs_rescue.*
+
+---
+
+# Next step: How to refine EllSeg localization using the various anatomy rules (shape, colour, eyelid, canthus, …)
+
+**Step 1 is done and LOCKED: EllSeg localizes.** EllSeg gives a good, continuous approximation of *where*
+the iris is. We accept that as the starting point. **Everything from here is refinement of that anchor by
+anatomy.** The fundamental statement:
+
+> **EllSeg tells us WHERE the iris is. Anatomy tells us WHAT the iris is.**
+
+## EllSeg Anchor Rule (#19, Dr. K, 2026-07-04)
+> EllSeg provides the **approximate iris location, centre, and size**. Its mask is only a **proposal**. The
+> final iris must be **reconstructed from anatomy**: a smooth circle / oval / sector inside the eyelid-opening
+> almond, bounded by sclera / canthus / lids, with reflection ignored by the arc-continuity rule.
+
+**USE from EllSeg:** approximate iris centre · approximate iris radius/diameter · frame-to-frame location
+anchor · search seed for the almond/iris analysis.
+
+**DO NOT use directly:** EllSeg's jagged mask · its exact outline · its fluctuating centre · its accidental
+inclusion of canthus/lid/shadow · its missing chunks during side gaze / reflection.
+
+## Fixed Iris Disc / Projected Oval Rule (#20, Dr. K, 2026-07-04)
+> The real iris is a **fixed-size circular disc**. Its true diameter does **not** fluctuate frame to frame.
+> When the eye turns to the side, that same fixed circle is seen in projection as an **oval**. The oval's
+> **long axis remains the true iris diameter**; only the **short axis foreshortens** with gaze angle.
+
+**One sentence to record:** *The iris size is anatomically fixed; EllSeg may move the centre, but it may not
+resize or distort the iris. The final mark is a fixed-size circle projected into an oval according to gaze
+and clipped by eyelids / canthus.* (Do NOT accept frame-to-frame size shimmer from EllSeg.)
+
+## The refinement algorithm (high level)
+1. **EllSeg locates** — approximate iris position and size.
+2. **Stabilize radius** — keep iris size largely constant across frames; the iris cannot shrink/grow rapidly.
+3. **Find almond context** — around EllSeg's location, identify the eyelid-opening space: upper lid, lower
+   lid, canthi, sclera, iris.
+4. **Find true iris evidence** — the dark iris arc/region within the almond, especially where it touches
+   true sclera.
+5. **Reconstruct shape** — replace EllSeg's irregular mask with a **smooth circle / oval / sector** of the
+   expected size and orientation.
+6. **Clip to what is visible** — cut only where eyelid / canthus hides the iris.
+7. **Stabilize centre** — use the **reconstructed smooth shape + previous frame**, NOT the raw EllSeg mask
+   centroid, to avoid flutter.
+
+## Practical size/shape procedure (the fixed-disc → oval mechanics)
+1. **Estimate true iris circle size** from good frontal/open frames.
+2. **Lock that size** as the anatomical iris diameter (this is R of #18).
+3. **Use EllSeg for centre/location hint**, not for per-frame radius.
+4. **Convert circle → oval by gaze:** front = circle; side = tall/vertical oval; extreme side = narrower oval.
+5. **Long axis stays fixed** at the true iris diameter.
+6. **Short axis shrinks mathematically** as the eye turns away (minor = R·cos θ, per #18).
+7. **Clip the oval** by lids/canthus so only the visible part is painted.
+8. **Do NOT accept frame-to-frame size shimmer** from EllSeg.
+
+*These are the rules to fill in next — shape, colour (sclera white/pink vs. iris dark), eyelid line, canthus
+boundary, arc-continuity through reflection — each becomes a named refinement rule as we lock it on the clip.*
+
+## Two-step naming (Dr. K, 2026-07-04)
+- **Step 1 — Location of Iris by EllSeg** (LOCKED): EllSeg localizes; accept centre/size/anchor.
+- **Step 2 — Refinement of the Iris** (starts here): refine EllSeg's Step-1 location by anatomy. Rule #21 is
+  the FIRST refinement pass — deliberately kept simpler than the full oval/anatomy model.
+
+## Rule #21 — Refinement of the Iris: Fixed Circle / Sclera-Bounded Iris Rule (Dr. K, 2026-07-04)
+> After EllSeg locates the iris, **do not trust EllSeg's changing outline or changing radius.** Use EllSeg
+> only as a **centre/size hint.** Then refine by looking for a **dark circular region with a sharp limbus
+> margin, bordered by relatively uniform white or pink sclera**, especially on the **medial and lateral**
+> sides. **Fit and complete a circle of FIXED radius** from that sclera-facing limbus arc.
+
+**One-line record:** *First refinement pass = fixed circle from the sclera-facing limbus. The iris is a dark
+circular structure with a sharp margin against relatively white/pink sclera. EllSeg gives the seed; the final
+iris circle has FIXED radius and is fitted from the limbus arc, not from EllSeg's jagged mask.*
+
+**This first version DELIBERATELY does NOT handle** (deferred to later refinement rules):
+oval foreshortening · perfect eyelid clipping · perfect canthus boundary · side-gaze oval geometry ·
+torsion / texture · exact visible-sector shape. **Just lock the iris as a stable circle.**
+
+**Procedure:**
+1. Pick a **stable radius R** from good EllSeg / frontal frames.
+2. Each frame: use the **EllSeg centre only as a seed**.
+3. Search nearby for **dark pixels forming a curved/convex limbus edge**.
+4. **Prefer edges where dark iris touches white/pink sclera** (medial & lateral limbus).
+5. **Fit a circle of FIXED radius R** to that limbus evidence.
+6. **Complete the circle** even if part is hidden or broken by reflection (arc-continuity, Rule #12).
+7. Use the **fitted circle centre** as the refined iris centre.
+8. **Do not let the circle radius change** frame by frame.

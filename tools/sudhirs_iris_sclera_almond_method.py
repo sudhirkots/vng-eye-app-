@@ -74,7 +74,7 @@ def mark_iris(bgr, gray, disc):
     mid-tone iris periphery, which is not bright).
     """
     Hc, Wc = gray.shape
-    ctx = cv2.dilate(disc, np.ones((25, 25), np.uint8))            # eye-interior context around EllSeg
+    ctx = np.full_like(gray, 255)                                  # ALMOND-CONTEXT RULE: analyse the whole eye-opening crop, not the iris disc
     vals = gray[ctx > 0]
     if vals.size < 50: return None, None
     thr, _ = cv2.threshold(vals, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)   # bright/dark split
@@ -90,6 +90,17 @@ def mark_iris(bgr, gray, disc):
     dark = ((gray < thr) & (ctx > 0)).astype(np.uint8)
     dark = cv2.morphologyEx(dark, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))     # strip thin lashes
     sclera_d = cv2.dilate(sclera, np.ones((5, 5), np.uint8))
+    def _visible(oval):
+        # CONTINUITY RULE: once a valid iris arc is found, continue the smooth circle/oval THROUGH any
+        # interruption and keep it — a bright patch inside the completed oval is OVERRIDDEN (treated as iris,
+        # not sclera). Bright is only sclera OUTSIDE the oval. So do NOT subtract sclera inside the oval: the
+        # iris = the completed oval clipped to the eye OPENING. (Eyelid & inner-canthus left for a later step.)
+        opening = cv2.morphologyEx((sclera | dark).astype(np.uint8), cv2.MORPH_CLOSE, np.ones((11, 11), np.uint8))
+        vis = (oval & opening).astype(np.uint8)
+        cs, _ = cv2.findContours(vis, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not cs: return None
+        m = np.zeros_like(vis); cv2.drawContours(m, [max(cs, key=cv2.contourArea)], -1, 1, -1)
+        return m if m.sum() > 0 else None
     n, lab, stats, cent = cv2.connectedComponentsWithStats(dark, 8)
     disc_area = max(1, int(disc.sum()))
     best, best_score = None, 0.0
@@ -115,41 +126,39 @@ def mark_iris(bgr, gray, disc):
     limbus = (edge > 0) & (sclera_d > 0)                          # the iris edge that abuts sclera = the limbus
     ys, xs = np.where(limbus)
     if len(xs) >= 12:
-        pts = np.column_stack([xs, ys]).astype(np.float64); n = len(pts)
-        def _circum(p):                                            # circle through 3 points
-            (x1, y1), (x2, y2), (x3, y3) = p
-            d = 2*(x1*(y2-y3) + x2*(y3-y1) + x3*(y1-y2))
-            if abs(d) < 1e-6: return None
-            s1, s2, s3 = x1*x1+y1*y1, x2*x2+y2*y2, x3*x3+y3*y3
-            ux = (s1*(y2-y3) + s2*(y3-y1) + s3*(y1-y2)) / d
-            uy = (s1*(x3-x2) + s2*(x1-x3) + s3*(x2-x1)) / d
-            return ux, uy, math.hypot(x1-ux, y1-uy)
-        # CONVEX-ARC test via RANSAC: the true limbus lies on ONE smooth circle; the straight/ragged
-        # lash & canthus edge points do not, so they fall out as outliers and can't drag the fit.
-        rng = np.random.default_rng(0); rlo, rhi = 0.55*r0, 1.35*r0; best_cc, best_n = None, 0
-        for _ in range(160):
-            cc = _circum(pts[rng.choice(n, 3, replace=False)])
-            if cc is None: continue
-            ux, uy, r = cc
-            if not (rlo <= r <= rhi): continue
-            ninl = int((np.abs(np.hypot(pts[:, 0]-ux, pts[:, 1]-uy) - r) < 3.0).sum())
-            if ninl > best_n: best_n, best_cc = ninl, cc
-        if best_cc is not None and best_n >= max(10, int(0.4*n)):
-            cx, cy, r_arc = best_cc
+        pts = np.column_stack([xs, ys]).astype(np.float64)
+        # FIXED-RADIUS fit (kills the centre jitter): the iris radius r0 is KNOWN, so fit only the CENTRE
+        # (2 DOF), not centre+radius (3 DOF). Fitting a circle of *free* radius to a short/partial limbus
+        # arc is ill-conditioned -- centre and radius trade off, so tiny per-frame edge changes swing the
+        # centre. With the radius locked, the centre is well-determined even from a short arc. Fixed-point
+        # solve of the known-radius circle: each limbus point implies a centre exactly r0 inward; average
+        # the inliers (points ~r0 from the current centre -> rejects lash/canthus edge), repeat to converge.
+        Mb = cv2.moments(best)
+        c = np.array([Mb["m10"]/Mb["m00"], Mb["m01"]/Mb["m00"]]) if Mb["m00"] else np.array([xs.mean(), ys.mean()])
+        n_inl = 0
+        for _ in range(6):
+            dirs = c - pts; norms = np.hypot(dirs[:, 0], dirs[:, 1]) + 1e-9
+            votes = pts + r0 * (dirs / norms[:, None])            # each limbus point's implied centre at radius r0
+            inl = np.abs(norms - r0) < max(3.0, 0.18*r0)          # keep points that lie on the r0 circle (the true arc)
+            n_inl = int(inl.sum())
+            c = votes[inl].mean(0) if n_inl >= 8 else votes.mean(0)
+        if n_inl >= max(10, int(0.35*len(pts))):
+            cx, cy = float(c[0]), float(c[1])
             alm = ((sclera > 0) | (best > 0)).astype(np.uint8); Mm = cv2.moments(alm)
             acx, acy, alm_r = (Mm["m10"]/Mm["m00"], Mm["m01"]/Mm["m00"], math.sqrt(Mm["m00"]/math.pi)) if Mm["m00"] > 0 else (cx, cy, r0)
             gx, gy = cx - acx, cy - acy; disp = math.hypot(gx, gy)     # gaze = opening centre -> iris
             frac = min(0.9, disp / max(alm_r, 1.0))
-            major = 2 * min(max(r_arc, 0.6*r0), 1.2*r0)                # radius from the convex arc, bounded by the prior
+            major = 2 * r0                                             # RADIUS LOCKED to the known iris radius
             minor = max(0.30*major, major*math.sqrt(max(0.05, 1 - frac*frac)))     # foreshorten along gaze
             ang = math.degrees(math.atan2(gy, gx)) + 90 if disp > 2 else 0.0       # long axis perpendicular to gaze
             oval = np.zeros_like(best)
             cv2.ellipse(oval, (int(round(cx)), int(round(cy))), (int(major/2), int(minor/2)), ang, 0, 360, 1, -1)
-            # RULES 1+2: the completed oval IS the iris mask (clean shape, fit to the limbus = not on sclera).
-            return oval, ((cx, cy), (major, minor), ang)
+            vis = _visible(oval)                                  # keep only what is SEEN (cut at the lid line)
+            return (vis if vis is not None else oval), ((cx, cy), (major, minor), ang)
     M = cv2.moments(best); cx, cy = (M["m10"]/M["m00"], M["m01"]/M["m00"]) if M["m00"] else (Wc/2, Hc/2)
     oval = np.zeros_like(best); cv2.circle(oval, (int(cx), int(cy)), int(r0), 1, -1)   # fallback: circle of known radius
-    return oval, ((cx, cy), (2*r0, 2*r0), 0.0)
+    vis = _visible(oval)
+    return (vis if vis is not None else oval), ((cx, cy), (2*r0, 2*r0), 0.0)
 
 meta = json.load(open(GT / "meta.json", encoding="utf-8"))
 def src_pts(e):
@@ -170,6 +179,7 @@ W = int(cap.get(3)); H = int(cap.get(4)); NF = int(cap.get(7)); FPS = cap.get(5)
 state = {ek: dict(cx=e["seed"][0], cy=e["seed"][1], lost=0) for ek, e in eyes.items()}
 vw = cv2.VideoWriter(str(OUTDIR / "sudhirs_iris_sclera_almond_method.mp4"), cv2.VideoWriter_fourcc(*"mp4v"), FPS, (W, H))
 painted = {ek: 0 for ek in eyes}
+trace = []                                                    # (frame, eye, cx, cy) iris-centre trace
 fi = -1
 while True:
     ok, frame = cap.read()
@@ -185,16 +195,23 @@ while True:
             x0, y0, x1, y1 = reg["win"]
             iris, oval = mark_iris(frame[y0:y1, x0:x1], gray[y0:y1, x0:x1], reg["disc"])
             if iris is not None and oval is not None:
-                (ocx, ocy), (omaj, omin), oang = oval
-                fcx, fcy = ocx + x0, ocy + y0                        # iris centre in full-frame coords
-                cv2.ellipse(frame, (int(fcx), int(fcy)), (int(omaj/2), int(omin/2)), oang, 0, 360,
-                            (0, 255, 0), 4)                          # thick round iris circle/oval
-                cv2.circle(frame, (int(fcx), int(fcy)), 9, (0, 255, 255), -1)   # yellow medium centre dot
+                (ocx, ocy), _, _ = oval
+                full = np.zeros((H, W), np.uint8); full[y0:y1, x0:x1] = iris   # only the SEEN iris
+                m = full > 0
+                frame[m] = (0.5 * frame[m] + np.array([0, 0, 255]) * 0.5).astype(np.uint8)   # marked red
+                cv2.drawContours(frame, cv2.findContours(full, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0],
+                                 -1, (0, 0, 200), 2)
+                fcx, fcy = ocx + x0, ocy + y0                        # centre used to follow the eye (not drawn)
                 st.update(cx=fcx, cy=fcy, lost=0); painted[ek] += 1; marked = True
+                trace.append((fi, ek, round(fcx, 2), round(fcy, 2)))
         if not marked: st["lost"] += 1
     cv2.putText(frame, f"f{fi}", (20, 55), cv2.FONT_HERSHEY_SIMPLEX, 1.3, (0, 0, 0), 6)
     cv2.putText(frame, f"f{fi}", (20, 55), cv2.FONT_HERSHEY_SIMPLEX, 1.3, (255, 255, 255), 2)
     vw.write(frame)
 cap.release(); vw.release()
+import csv as _csv
+with open(OUTDIR / "points.csv", "w", newline="", encoding="utf-8") as _fp:
+    _w = _csv.writer(_fp); _w.writerow(["frame", "eye", "cx", "cy"]); _w.writerows(trace)
 print("painted frames:", painted, "of", NF)
-print("video ->", OUTDIR / "iris_rules.mp4")
+print("video ->", OUTDIR / "sudhirs_iris_sclera_almond_method.mp4")
+print("points ->", OUTDIR / "points.csv")
