@@ -127,3 +127,57 @@ iris + sclera (exact partition, no gaps); eyelashes ignored.
 - [~] Step 3 — locate centre by known-radius **voting**; works for circle + moderate arcs; **oval
       completion for extreme gaze still to add**.
 - Hard boundary enforced throughout: nothing outside the almond.
+
+---
+
+## Sudhir's iris–sclera–almond method — clinician sketches + finalized rules (2026-07-03)
+
+*"Sudhir's iris–sclera–almond method" = EllSeg locates → find sclera (white/pink) → iris is the uniformly-dark
+region abutting the sclera along a convex arc → iris = almond − sclera → mark only the visible part.
+Implemented in `tools/sudhirs_iris_sclera_almond_method.py`.*
+
+Three hand sketches ("the ways the iris might be seen"), to be stored in `docs/iris_sketches/`
+(`iris_ways_seen_1.jpg`, `_2.jpg`, `_3.jpg`). What they encode:
+
+- **Sheet 1 & 2 — the iris can sit ANYWHERE in the almond**, and be any *portion*: a full disc high/central,
+  an oval against a side, a crescent at the top or bottom margin, a **tiny nub in a corner**, or **absent
+  entirely** (empty almond = iris hidden/blink). The **hatch-ticks along the lid lines are lashes — never
+  iris.** The visible iris is drawn **filled solidly / uniformly** (one piece, not blotches).
+- **Sheet 3 (FRONT / SIDE / VP + "Track")** — the iris is a full circle seen front-on and **foreshortens to
+  an OVAL at the extreme side**. The dotted circle + "Track" is the *completion / centre* step: imagine the
+  whole iris from the visible arc. **This completion is deferred** — see the current-task note below.
+
+### Finalized iris-MARKING rules (this is the spec the marker must follow)
+1. **EllSeg = approximate location only** (region + rough size); never its exact outline as the mark.
+2. **Find the sclera first** — the uniform **white or pink/reddish (at least whitish/pinkish)** patch inside
+   the opening.
+3. **Iris = the uniformly-dark region that ABUTS the sclera** — dark against white/pink, one solid piece
+   (not scattered blotches).
+4. **Convex-arc discriminator** — the iris↔sclera edge is a **smooth convex arc** (limbus); a **lid/lash edge
+   is straight or ragged**. Only the smooth-convex-against-sclera boundary counts as iris edge.
+5. **Almond = sclera + iris** → **iris = almond − sclera**; nothing else lives inside the opening. Lashes
+   (thin) are stripped first.
+6. **Shape = round / arc / crescent / oval** (oval at extreme side). The iris may be any visible portion.
+7. **Empty almond → mark NOTHING** (hidden/blink). Never invent an iris.
+
+### Shape rule (Dr. K, 2026-07-03) — the iris is a CIRCLE; complete it
+The iris shape is **always a circle** (an **oval** at the sides, a **sector/arc** when the lid covers part).
+When ~60–70% of the circumference is tracked, **fit and COMPLETE the circle/oval** to that arc. Consequences
+for the mark:
+- **Nothing outside the fitted circle** — no protrusions / "horns" running along the lid or lash margin.
+- **Fill the interior** — no gray gaps left inside the circle (catch-light, mid-tone iris → still iris).
+- Covered iris = a clean **sector** of that circle, not a blob.
+Centre estimation from the completed circle is the later step; for now the *mark* is the completed circle/oval
+(clipped off the white/pink sclera), painted red.
+
+### Priority + oval geometry (Dr. K, 2026-07-03) — SHAPE OVERRIDES DARKNESS
+**Order of rules (overriding first):**
+1. **Complete the circle/oval** from the clearest stretch of limbus you can make out. The smooth shape is the law.
+2. **THEN** select dark *within* that shape. Selecting dark FIRST lets the iris grow toward the **medial canthus
+   / lid / lashes**; completing the shape first prevents it. Dark that falls OUTSIDE the completed oval (e.g.
+   canthal shadow) is **not iris — leave it out**, even though it's dark.
+
+**Oval geometry:** the iris is a fixed-radius circle; at gaze it foreshortens to an oval. The **LONG axis =
+perpendicular to the gaze direction** (keeps the full iris width); the **SHORT axis = along the gaze direction**
+(compressed). Looking left → tall vertical oval; looking down-and-right → oval tilted so its long axis is
+perpendicular to that diagonal. Angulation follows gaze. (Foreshorten more the further the eye has turned.)
