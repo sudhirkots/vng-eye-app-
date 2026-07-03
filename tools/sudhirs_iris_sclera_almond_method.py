@@ -9,7 +9,9 @@ EllSeg gives only the approximate location. Then, inside that eye region:
   3. iris = almond - sclera: within the opening the non-sclera dark blob adjacent to the white/pink IS the
      iris. A dark blob NOT touching sclera (lid shadow, brow) is rejected.
   4. Empty almond (no dark blob abutting sclera) -> mark NOTHING.
-Mark only the VISIBLE part (no circle completion). Paint it red. Run with the rit-nets venv python.
+Dr. K's two rules: (1) the iris shape is ALWAYS a circle/oval; (2) the iris is never bright. So COMPLETE
+the oval from the limbus arc and output the oval itself (fit to its boundary with the bright sclera) —
+never clip it to dark pixels. Paint it red. Run with the rit-nets venv python.
 """
 import sys, os, json, math
 from pathlib import Path
@@ -63,16 +65,14 @@ def ellseg_region(gray_full, cx, cy, hw, hh, W, H):
     return dict(win=(x0, y0, x1, y1), disc=disc)
 
 def mark_iris(bgr, gray, disc):
-    """Rule-based visible-iris mask within an eye crop. Returns mask (uint8) or None."""
-    def _dark_within(oval, dark):
-        # select the DARK (visible iris) inside the completed oval: cuts at the lid line (lid=skin, not dark)
-        # and at the sclera; thin lashes stripped by the open; keep the largest piece.
-        vis = cv2.morphologyEx((oval & dark).astype(np.uint8), cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
-        vis = cv2.morphologyEx(vis, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
-        cs, _ = cv2.findContours(vis, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if not cs: return None
-        m = np.zeros_like(vis); cv2.drawContours(m, [max(cs, key=cv2.contourArea)], -1, 1, -1)
-        return m if m.sum() > 0 else None
+    """Rule-based iris mask within an eye crop (Dr. K's two rules). Returns mask (uint8) or None.
+
+    RULE 1 (shape): the iris is ALWAYS a clean circle or oval — never a jagged blob.
+    RULE 2 (never bright): the iris can never be bright, so the oval is bounded by the LIMBUS (its
+    boundary with the bright sclera). These together mean: complete the oval from the limbus arc and
+    RETURN THE OVAL — do NOT clip it to dark pixels (that broke both rules: jagged shape + dropped the
+    mid-tone iris periphery, which is not bright).
+    """
     Hc, Wc = gray.shape
     ctx = cv2.dilate(disc, np.ones((25, 25), np.uint8))            # eye-interior context around EllSeg
     vals = gray[ctx > 0]
@@ -145,12 +145,11 @@ def mark_iris(bgr, gray, disc):
             ang = math.degrees(math.atan2(gy, gx)) + 90 if disp > 2 else 0.0       # long axis perpendicular to gaze
             oval = np.zeros_like(best)
             cv2.ellipse(oval, (int(round(cx)), int(round(cy))), (int(major/2), int(minor/2)), ang, 0, 360, 1, -1)
-            vis = _dark_within(oval, dark)         # THEN select dark within the oval -> cut at lid line & sclera
-            if vis is not None: return vis, ((cx, cy), (major, minor), ang)   # mask + the completed circle/oval
+            # RULES 1+2: the completed oval IS the iris mask (clean shape, fit to the limbus = not on sclera).
+            return oval, ((cx, cy), (major, minor), ang)
     M = cv2.moments(best); cx, cy = (M["m10"]/M["m00"], M["m01"]/M["m00"]) if M["m00"] else (Wc/2, Hc/2)
     oval = np.zeros_like(best); cv2.circle(oval, (int(cx), int(cy)), int(r0), 1, -1)   # fallback: circle of known radius
-    vis = _dark_within(oval, dark)
-    return (vis, ((cx, cy), (2*r0, 2*r0), 0.0)) if vis is not None else (None, None)
+    return oval, ((cx, cy), (2*r0, 2*r0), 0.0)
 
 meta = json.load(open(GT / "meta.json", encoding="utf-8"))
 def src_pts(e):

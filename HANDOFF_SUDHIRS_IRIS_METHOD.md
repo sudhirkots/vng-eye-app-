@@ -5,6 +5,19 @@ clinician-in-the-loop correction toolchain. Rule-based mask IoU has **plateaued 
 frames, but the **iris-CENTRE** (the clinical target) is good (~12 px on the worst frames). Nothing wired into
 the clinical path; large outputs gitignored.
 
+## Update (2026-07-03, later) — shape-first fix (Dr. K's two rules)
+
+Dr. K reframed the iris as **two rules: (1) the shape is ALWAYS a circle/oval; (2) the iris is never
+bright.** The old `mark_iris` completed the oval but then intersected it with *dark* pixels
+(`_dark_within`), which broke BOTH rules — jagged shape (rule 1) and it dropped the mid-tone iris
+periphery, which isn't bright (rule 2). **Fix:** `mark_iris` now RETURNS THE COMPLETED OVAL itself (fit to
+the limbus arc = its boundary with the bright sclera); the dark-clip step is deleted. So the exported mask
+now equals the clean oval the overlay already drew. Verified on the 25 hard crops (off-OneDrive demo
+`rit-nets/demo_shapefix.py`): jaggedness gone, clean ovals throughout. Full-clip overlay regenerated —
+**640/640 frames marked on both eyes**. Small remaining item: the oval occasionally overshoots the limbus by
+a few px (tighten radius to the RANSAC arc, not the prior bound). The vs-clinician IoU wasn't re-scored (the
+mask zip is on the home PC, not the clinic PC).
+
 ## What happened this session
 1. **Rebuilt the EllSeg stack on the HOME PC** (was clinic-only) — off-OneDrive at `C:\Users\sudhi\rit-nets\`
    (`rit-nets-venv` torch 2.12.1+cpu, cv2 5, numpy 2.5; cloned `RSKothari/EllSeg`, weights `all.git_ok`).
