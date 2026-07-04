@@ -62,17 +62,21 @@ GitHub (durable), + a matching commit message `Lock <rule name>`.
     `rit_orbit_lock_marker_v2.html`) built this session but NOT needed for the direction answer.
 - To return to a stage: `git fetch origin --tags` then `git checkout checkpoint/<name>`.
 
-## Current direction (RIT = Rescue Iris Tracker)
+## Current direction — QUALITATIVE nystagmus diagnosis (Dr. K, 2026-07-04)
 
-RIT = **orbit-marking method** (clinician draws the eye-opening oval with 3 clicks/eye on frame 1,
-MediaPipe-free — the reference frame) **+ clinician-marked ground truth + a learned iris/sclera model**.
-Four candidate learning approaches: **SAM 2**, **pretrained eye nets** (RITnet/EllSeg/DeepVOG),
-**classical geometry**, **centre-correction loop**. Two reframes govern all: optimise the **iris-centre
-trace** (not mask IoU), and learn **geometry/motion** (not appearance).
+**The goal is a rough, qualitative bedside read — NOT precise iris tracking/measurement.** All we want:
+(1) is there nystagmus or not; (2) is it in primary position or only on side gaze (which gaze zone);
+(3) direction (left/right/up/down-beating); (4) does it increase or decrease looking to one side (Alexander's
+law). No exact velocity/rate/degrees; **no accurate iris outline needed** — the rough EllSeg centroid suffices.
 
-**Latest result:** EllSeg (pretrained net) is the lead — zero-shot disc IoU 0.75–0.80 on clean frames; RITnet
-fails. Details + reproduction + next steps (a/b/c) in `HANDOFF_RIT_NETS_EVAL.md`. The colour-feature
-ExtraTrees model (iris IoU 0.81 vestibular) does NOT transfer to the monochrome pontine clip.
+**Approach that works (checkpoint `nystagmus-direction-primary-gaze-zones`):** EllSeg iris CENTROID (clean,
+smooth eye-position signal) → windowed **slow-phase asymmetry** direction detector → **sustained sclera-balance
+gaze zones** (head-motion invariant). Correctly calls the right-vestibular-neuritis clip as primary-gaze
+LEFT-beating at 30 fps. Full objective + rules in `docs/RIT_IRIS_METHOD.md`; milestones in
+`CHECKPOINTS_BRIEF_DESCRIPTION.md`.
+
+**Retired:** precise iris tracking/marking (SAM2 / learned segmenter / limbus-arc circle) — abandoned; only a
+rough eye-position signal is needed. 30 fps gives direction only (fast phase undersampled); 60/120 fps for rate.
 
 ## Hard rules (do not break without explicit approval)
 

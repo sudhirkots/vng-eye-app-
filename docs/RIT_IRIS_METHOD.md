@@ -647,6 +647,19 @@ slide independently by construction; any flow that would change the distance is 
 fixed-distance pair, and implausible jumps freeze the frame. Verified: inter-canthus distance spread = **0.0%**
 across all 640 frames (568px L, 575px R). This rigid canthus frame is the head-fixed reference for iris motion.
 
+## CLINICAL OBJECTIVE (Dr. K, 2026-07-04) — the whole scope, nothing more
+
+A **rough, qualitative** bedside-style diagnosis. That is ALL we want to do:
+1. **Is there nystagmus, or is there no nystagmus?**
+2. **Is it present in primary position, or only on looking to the sides?** (which gaze position)
+3. **What is the direction of the nystagmus?** (left / right / up / down-beating)
+4. **Does it get MORE or LESS on looking to one side?** (Alexander's-law gradient across gaze zones)
+
+Not measured: exact velocity, beat rate, degrees, or a perfect trace. **No precise iris outline is needed** —
+a rough eye-position signal (EllSeg centroid) is enough. The pipeline maps to these questions: present/absent
++ confidence → Q1; sustained gaze zones → Q2; slow-phase asymmetry direction → Q3; comparing confidence/
+strength across primary vs left vs right gaze zones → Q4.
+
 ## GOAL REFRAME — Clinical Nystagmus Direction Rule (Dr. K, 2026-07-04) — the new primary output
 *Stop chasing a perfect VNG-grade continuous trace / perfect iris boundary. Aim for the clinically useful
 answer instead.*
