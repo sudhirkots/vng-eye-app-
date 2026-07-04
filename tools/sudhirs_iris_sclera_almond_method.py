@@ -1,5 +1,5 @@
 """Sudhir's iris-sclera-almond method — mark the VISIBLE iris by Dr. K's rules
-(docs/RIT_IRIS_METHOD.md, 2026-07-03).
+(docs/CLINICAL_NYSTAGMUS_DETECTOR.md, 2026-07-03).
 
 EllSeg gives only the approximate location. Then, inside that eye region:
   1. SCLERA = the bright white / pink-reddish patch (one Otsu split of the eye interior separates the

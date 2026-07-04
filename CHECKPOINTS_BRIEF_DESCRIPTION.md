@@ -23,7 +23,7 @@ used. Framing locked: **"EllSeg tells us WHERE the iris is; anatomy tells us WHA
 **Do not use:** its jagged mask, exact outline, fluctuating centre, or side-gaze dropouts.
 
 **Key files:** `tools/sudhir_ellseg_raw_video.py` (raw disc over the whole clip), rules #17–#21 in
-`docs/RIT_IRIS_METHOD.md`.
+`docs/CLINICAL_NYSTAGMUS_DETECTOR.md`.
 
 ---
 
@@ -72,5 +72,5 @@ head-free eye position in later if confidence needs raising.
 
 ---
 
-*All the detailed rules behind these checkpoints live in `docs/RIT_IRIS_METHOD.md`. The checkpoint convention
+*All the detailed rules behind these checkpoints live in `docs/CLINICAL_NYSTAGMUS_DETECTOR.md`. The checkpoint convention
 itself is in `CLAUDE.md`. Update this file whenever a new `checkpoint/<name>` is locked.*

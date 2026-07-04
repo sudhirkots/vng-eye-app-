@@ -1,4 +1,4 @@
-"""RIT iris detector -- implements docs/RIT_IRIS_METHOD.md.
+"""RIT iris detector -- implements docs/CLINICAL_NYSTAGMUS_DETECTOR.md.
 
 Per eye, inside the tracked almond (orbit):
   STRIP lashes -> read the smooth shapes.

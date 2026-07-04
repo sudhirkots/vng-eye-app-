@@ -6,7 +6,7 @@ dark blob (limbus edge AND lid-cut edge). Fix: use EllSeg only for localization 
 iris/sclera by rule (dark vs bright), isolate the LIMBUS ARC (the iris edge that abuts the white sclera,
 NOT the lid-cut edge), and locate the centre by voting one iris-radius inward from that arc — the limbus is
 a rigid circle, so its centre does not move as the lid covers more of the iris. (Dr. K's own method:
-docs/RIT_IRIS_METHOD.md + tools/rit_find_limbus.py, now anchored by EllSeg instead of painted marks.)
+docs/CLINICAL_NYSTAGMUS_DETECTOR.md + tools/rit_find_limbus.py, now anchored by EllSeg instead of painted marks.)
 
 Radius is held ~constant (running median of EllSeg's radius) — the same eye can't change size frame to
 frame; that removes the size-flicker that shifts a blob centre. No fabrication: too few limbus votes / bad

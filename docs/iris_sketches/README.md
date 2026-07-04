@@ -9,5 +9,5 @@ Save the three uploaded hand-sketch photos here, named:
 - `iris_ways_seen_3.jpg` — labelled: eyeball at FRONT / SIDE / VP; "Track" with dotted-circle completion;
   "OVAL when it goes to the extreme side".
 
-These are the visual reference for the finalized marking rules in `../RIT_IRIS_METHOD.md`
+These are the visual reference for the finalized marking rules in `../CLINICAL_NYSTAGMUS_DETECTOR.md`
 (section "Clinician sketches + finalized marking rules, 2026-07-03").

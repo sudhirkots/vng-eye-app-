@@ -1,7 +1,9 @@
-# RIT — How to mark the iris (Dr. Kothari's method, clean rebuild 2026-06-30)
+# Clinical Nystagmus Detector — Dr. Kothari's method
 
-*Supersedes the earlier ad-hoc iris fitting. This is the method dictated step by step by Dr. Kothari.
-Build it ONE step at a time; verify each step visually on the real frames before adding the next.*
+*The goal is a **qualitative clinical nystagmus reader** (see CLINICAL OBJECTIVE below), not precise iris
+tracking. The current pipeline: EllSeg iris centroid → windowed slow-phase asymmetry direction → sustained
+sclera-balance gaze zones. Earlier sections on accurate iris marking (limbus arc, fixed circle, orbit lock)
+are **retired history** — kept for reference, no longer the goal. (Renamed 2026-07-04 from RIT_IRIS_METHOD.md.)*
 
 ---
 

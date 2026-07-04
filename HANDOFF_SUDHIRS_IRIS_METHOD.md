@@ -30,7 +30,7 @@ mask zip is on the home PC, not the clinic PC).
 3. **Named + built "Sudhir's iris–sclera–almond method"** (`tools/sudhirs_iris_sclera_almond_method.py`):
    EllSeg for LOCATION only → find sclera (white/pink) → iris = uniform dark abutting sclera → **complete the
    CIRCLE/OVAL from the convex limbus arc (RANSAC), then select dark within it**. Rules + Dr. K's 3 sketches
-   folded into `docs/RIT_IRIS_METHOD.md` (+ `docs/iris_sketches/`). Key rule order (Dr. K): **shape overrides
+   folded into `docs/CLINICAL_NYSTAGMUS_DETECTOR.md` (+ `docs/iris_sketches/`). Key rule order (Dr. K): **shape overrides
    darkness** — complete the oval first, then keep the dark inside (cuts at lid line & sclera, ignores lashes);
    long axis ⟂ gaze, short axis foreshortened along gaze.
 4. **Correction loop built:** `tools/rit_paint_tool.html` upgraded to (a) **auto-load** the crops in its folder

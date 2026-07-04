@@ -71,6 +71,6 @@ objectively, whether OpenCV is good enough. This ends "fix one frame, break anot
   polygons) and `tools/rit_evaluate_iris_masks.py` (imports the detector's own `fit_iris`, runs it
   cold-start on each marked frame, reports iris/sclera/almond IoU, centre error in px, iris-outside-almond
   fraction, and the sclera+iris-fill-almond check; writes `RIT_ground_truth/evaluation.json`).
-- The method spec (the OpenCV rules) is in `docs/RIT_IRIS_METHOD.md`.
+- The method spec (the OpenCV rules) is in `docs/CLINICAL_NYSTAGMUS_DETECTOR.md`.
 - **Next:** Dr. K marks the 38 frames → run extract + evaluate → read the numbers → decide Step 4 vs
   Step 5. **No more detector tuning by visual guess.** Nothing committed; probe-only.

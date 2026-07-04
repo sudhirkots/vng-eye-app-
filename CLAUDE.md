@@ -18,7 +18,7 @@ ends it with "Let's end", from either machine.
 2. Read/reconcile the saved state:
    - the **latest `HANDOFF_*.md`** by date (currently `HANDOFF_RIT_NETS_EVAL.md`) + `HANDOFF_RIT_LEARNED_SEGMENTER.md`;
    - recent sections of **`EYE_VNG_DEVELOPMENT_HISTORY.md`** and the RIT docs
-     (`docs/RIT_STRATEGY_AND_ROADMAP.md`, `docs/RIT_IRIS_METHOD.md`, `IRIS_IDENTIFICATION_RULES_V2.md`,
+     (`docs/RIT_STRATEGY_AND_ROADMAP.md`, `docs/CLINICAL_NYSTAGMUS_DETECTOR.md`, `IRIS_IDENTIFICATION_RULES_V2.md`,
      `ORBIT_AND_IRIS_TRACKING_RULES_V2.md`);
    - `git log --oneline -10` + `git status --short`;
    - anything freshly modified under `outputs/**/RIT_ground_truth/` (new clinician marks) and
@@ -56,7 +56,7 @@ GitHub (durable), + a matching commit message `Lock <rule name>`.
     + per-eye sclera balance) → `tools/nystagmus_direction.py` (windowed slow-phase asymmetry detector +
     Sustained Gaze-Zone classification by sclera-balance/canthus-proximity, head-motion invariant). Correctly
     calls the right-vestibular-neuritis clip: **primary gaze, LEFT-beating (conf 0.34)** at 30 fps. Rules in
-    `docs/RIT_IRIS_METHOD.md`: Clinical Nystagmus Direction, Fast-Phase Acceptance, Windowed Slow-Phase
+    `docs/CLINICAL_NYSTAGMUS_DETECTOR.md`: Clinical Nystagmus Direction, Fast-Phase Acceptance, Windowed Slow-Phase
     Asymmetry, Sclera-Balance Gaze Zone, Sustained Gaze Zone. Note: 30 fps undersamples the fast phase (no beat
     rate) — direction only; 60/120 fps recommended for rate. Orbit-lock tools (`tools/orbit_lock*.py`,
     `rit_orbit_lock_marker_v2.html`) built this session but NOT needed for the direction answer.
@@ -72,7 +72,7 @@ law). No exact velocity/rate/degrees; **no accurate iris outline needed** — th
 **Approach that works (checkpoint `nystagmus-direction-primary-gaze-zones`):** EllSeg iris CENTROID (clean,
 smooth eye-position signal) → windowed **slow-phase asymmetry** direction detector → **sustained sclera-balance
 gaze zones** (head-motion invariant). Correctly calls the right-vestibular-neuritis clip as primary-gaze
-LEFT-beating at 30 fps. Full objective + rules in `docs/RIT_IRIS_METHOD.md`; milestones in
+LEFT-beating at 30 fps. Full objective + rules in `docs/CLINICAL_NYSTAGMUS_DETECTOR.md`; milestones in
 `CHECKPOINTS_BRIEF_DESCRIPTION.md`.
 
 **Retired:** precise iris tracking/marking (SAM2 / learned segmenter / limbus-arc circle) — abandoned; only a

@@ -84,7 +84,7 @@ Guard the painted `to_mark/` set from OneDrive overwrite; the extracted `masks/`
 ## OPEN — clinician recognition interview (pending Dr. K's answers)
 
 Before more feature work, capture *how Dr. K recognizes* the anatomy so the annotation rules + features come
-from the clinician, not from guesses. Questions posed (awaiting answers), to fold into `docs/RIT_IRIS_METHOD.md`:
+from the clinician, not from guesses. Questions posed (awaiting answers), to fold into `docs/CLINICAL_NYSTAGMUS_DETECTOR.md`:
 1. **Sclera vs red conjunctiva** — does injected pink/red conjunctiva count as sclera, or only pure white?
    (Drives the sclera class; the model currently bleeds sclera onto the lid on blink frames.)
 2. **Iris vs pupil** — mark the whole dark disc as one (iris), pupil never separate? Track limbus, never pupil?
