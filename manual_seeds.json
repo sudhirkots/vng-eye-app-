@@ -1,0 +1,10 @@
+{
+  "nystagmus at rest to left in right vestibular neuritis": {"R": [499, 388], "L": [1559, 460]},
+  "nystagmus at rest to left and head impulse positive in right vestibular neuritis": {"R": [548, 298], "L": [1523, 421]},
+  "gaze-evoked nystagmus in pontine glioma": {"R": [670, 684], "L": [1364, 647]},
+  "gaze-evoked nystagmus-1": {"R": [539, 407], "L": [1249, 405]},
+  "fistula nystagmus": {"R": [571, 749], "L": [980, 660]},
+  "3": {"R": [712, 502], "L": [1387, 473]},
+  "2": {"R": [493, 435], "L": [1284, 383]},
+  "1": {"R": [1115, 792], "L": [1510, 721]}
+}

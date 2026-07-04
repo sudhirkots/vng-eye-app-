@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Iris seed marker — click the clearer iris</title>
+<style>
+  :root { --bg:#111; --panel:#1b1b1b; --ink:#eee; --R:#19d3ff; --L:#ff9a3c; }
+  * { box-sizing:border-box; } body { margin:0; font-family:Segoe UI, system-ui, sans-serif; background:var(--bg); color:var(--ink); user-select:none; }
+  #bar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:8px 10px; background:var(--panel); position:sticky; top:0; border-bottom:1px solid #333; z-index:5; }
+  button, label.btn { background:#2a2a2a; color:var(--ink); border:1px solid #444; border-radius:6px; padding:7px 11px; font-size:14px; cursor:pointer; }
+  canvas { background:#000; max-width:98vw; box-shadow:0 0 0 1px #333; cursor:crosshair; }
+  #wrap { display:flex; justify-content:center; padding:10px; } #status { font-size:13px; opacity:.9; }
+  .sep { width:1px; height:26px; background:#3a3a3a; margin:0 2px; } #hint { padding:2px 12px 10px; font-size:13px; opacity:.85; line-height:1.55; }
+  b.R { color:var(--R); } b.L { color:var(--L); } code { background:#000; padding:1px 5px; border-radius:4px; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <label class="btn">📂 Load clip (.mp4)<input id="file" type="file" accept="video/*" hidden></label>
+  <span class="sep"></span>
+  <button id="clear">Clear</button>
+  <span class="sep"></span><span id="status">no clip</span><span class="sep"></span>
+  <button id="export">⬇ Download seed</button>
+</div>
+<div id="wrap"><canvas id="view"></canvas></div>
+<div id="hint">
+  Load the clip; it shows the <b>first frame</b>. <b>Click the iris of the clearer eye — ONE click is enough.</b>
+  Clicking on the <b class="R">left half</b> marks the patient's RIGHT eye; the <b class="L">right half</b>
+  marks the patient's LEFT eye. You may click the other eye too if you want both. Then <b>Download seed</b>
+  and paste the line into <code>manual_seeds.json</code> (or just tell me the numbers). EllSeg locates the
+  iris on every frame from this one point.
+</div>
+<video id="vid" style="display:none"></video>
+<script>
+const vid = document.getElementById('vid'), view = document.getElementById('view'), ctx = view.getContext('2d');
+let clip = '', seeds = {};   // seeds.R / seeds.L = [x,y]
+document.getElementById('file').addEventListener('change', e => {
+  const f = e.target.files[0]; if (!f) return;
+  clip = f.name.replace(/\.[^.]+$/, ''); seeds = {};
+  vid.src = URL.createObjectURL(f); vid.currentTime = 0.05;
+});
+vid.addEventListener('loadeddata', () => vid.currentTime = 0.05);
+vid.addEventListener('seeked', draw);
+function draw() {
+  view.width = vid.videoWidth; view.height = vid.videoHeight;
+  ctx.drawImage(vid, 0, 0, view.width, view.height);
+  const col = { R: '#19d3ff', L: '#ff9a3c' }, lab = { R: 'R (patient right, image-left)', L: 'L (patient left, image-right)' };
+  for (const ek in seeds) { const p = seeds[ek];
+    ctx.beginPath(); ctx.arc(p[0], p[1], 11, 0, 7); ctx.fillStyle = '#fff'; ctx.fill();
+    ctx.beginPath(); ctx.arc(p[0], p[1], 6, 0, 7); ctx.fillStyle = col[ek]; ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.font = '18px sans-serif'; ctx.fillText(lab[ek], p[0] + 13, p[1] - 8);
+  }
+  status();
+}
+view.addEventListener('pointerdown', e => {
+  if (!clip) return;
+  const r = view.getBoundingClientRect(), sx = view.width / r.width, sy = view.height / r.height;
+  const x = Math.round((e.clientX - r.left) * sx), y = Math.round((e.clientY - r.top) * sy);
+  seeds[x < view.width / 2 ? 'R' : 'L'] = [x, y]; draw();
+});
+document.getElementById('clear').onclick = () => { seeds = {}; draw(); };
+function status() {
+  document.getElementById('status').textContent = clip
+    ? `${clip}  (${view.width}x${view.height})  —  ${Object.keys(seeds).join('+') || 'click an iris'}` : 'no clip';
+}
+document.getElementById('export').onclick = () => {
+  if (!Object.keys(seeds).length) { document.getElementById('status').textContent = 'click an iris first'; return; }
+  const inner = Object.keys(seeds).map(ek => `"${ek}": [${seeds[ek]}]`).join(', ');
+  const line = `  "${clip}": {${inner}}`;
+  navigator.clipboard && navigator.clipboard.writeText(line).catch(() => {});
+  const blob = new Blob([`{\n${line}\n}\n`], { type: 'application/json' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'seed_' + clip + '.json'; a.click();
+  document.getElementById('status').textContent = 'saved:  ' + line.trim();   // no popup
+};
+</script>
+</body>
+</html>

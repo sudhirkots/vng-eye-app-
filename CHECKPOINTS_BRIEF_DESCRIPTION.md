@@ -68,7 +68,26 @@ bridge anchor, mark-once tracker, and the `tools/rit_orbit_lock_marker_v2.html` 
 head-free eye position in later if confidence needs raising.
 
 **Key files:** `tools/ellseg_centroid_trace.py`, `tools/nystagmus_direction.py`.
-**Next (not started):** calibrate the confidence threshold across several clips with known clinical labels.
+
+---
+
+## checkpoint/nystagmus-single-eye-calibration
+**Single-eye support + one-click seeding + first multi-clip calibration (LOCKED — current).**
+
+**What was achieved:**
+- **Single-eye mode** — the detector uses whichever eye(s) are present (nystagmus is conjugate, so one *clear*
+  iris is enough; both eyes are averaged when available). Lets you skip a ptotic/occluded/poorly-tracked eye.
+- **One-click iris seed marker** (`tools/rit_iris_seed_marker.html`) — click the clearer iris on the first
+  frame; window auto-sizes from that iris; saved to `manual_seeds.json` (1- or 2-eye entries). Seeding
+  priority: manual → clinician orbit marks → automatic dark-blob finder.
+- **First calibration** (`tools/nystagmus_calibrate.py`, 8 clinician-seeded clips; results in
+  `docs/CALIBRATION_RESULTS.md`): **4/8 fully correct, incl. 3/3 true negatives** (normal clips correctly
+  "no clear nystagmus"). **Confidence separates cleanly** — real nystagmus 0.60–0.63, normal ≤ 0.26.
+- **Known remaining bugs:** vertical channel over-calls (fistula "UP-beating" false positive); gaze-evoked not
+  detected (gaze zones don't split); some positives missed (head-impulse clip). Next work targets these.
+
+**Key files:** `tools/rit_iris_seed_marker.html`, `manual_seeds.json`, `tools/nystagmus_calibrate.py`,
+`docs/CALIBRATION_RESULTS.md`.
 
 ---
 

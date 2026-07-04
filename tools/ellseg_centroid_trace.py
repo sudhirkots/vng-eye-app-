@@ -69,26 +69,78 @@ def region(bgr_full, gray_full, cx, cy, hw, hh, W, H):
     nL = int(cols[xs < icx].sum()); nR = int(cols[xs >= icx].sum())   # sclera left vs right of the iris
     return dict(cx=m["m10"]/m["m00"]+x0, cy=m["m01"]/m["m00"]+y0, nL=nL, nR=nR, area=int(disc.sum()))
 
-meta = json.load(open(GT / "meta.json", encoding="utf-8"))
-def src_pts(e):
-    X0, Y0, s = e["X0"], e["Y0"], e["scale"]; return np.array([[x/s+X0, y/s+Y0] for x, y in e["orbit_crop"]], np.float32)
-eyes = {}
-for ek in ("L", "R"):
-    ents = sorted([v for v in meta.values() if v.get("eye") == ek and "orbit_crop" in v], key=lambda v: v["frame"])
-    if not ents: continue
-    ws, hs = [], []
-    for v in ents:
-        (cx, cy), (a1, a2), ang = cv2.fitEllipse(src_pts(v)); ws.append(max(a1, a2)); hs.append(min(a1, a2))
-    (cx0, cy0), _, _ = cv2.fitEllipse(src_pts(ents[0]))
-    eyes[ek] = dict(ow=float(np.median(ws)), oh=float(np.median(hs)), seed=(cx0, cy0))
-
 cap = cv2.VideoCapture(str(VIDEO))
-W = int(cap.get(3)); H = int(cap.get(4)); NF = int(cap.get(7))
+W = int(cap.get(3)); H = int(cap.get(4)); NF = int(cap.get(7)); cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+ok0, frame0 = cap.read()
+
+def auto_seed(fr):
+    """No clinician marks -> locate the two eyes as the darkest round iris blobs (close-up two-eye clips)."""
+    g = cv2.cvtColor(fr, cv2.COLOR_BGR2GRAY); gb = cv2.GaussianBlur(g, (0, 0), 2)
+    d = cv2.morphologyEx((gb < np.percentile(gb, 8)).astype(np.uint8)*255, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+    n, lab, stt, cen = cv2.connectedComponentsWithStats(d, 8)
+    cand = []
+    for i in range(1, n):
+        a, w, h = stt[i, cv2.CC_STAT_AREA], stt[i, cv2.CC_STAT_WIDTH], stt[i, cv2.CC_STAT_HEIGHT]
+        if a < (W*0.02)**2 or a > (W*0.22)**2 or not (0.4 < w/(h+1e-9) < 2.5) or cen[i][1] > H*0.72: continue
+        cand.append((cen[i][0], cen[i][1], max(w, h)))
+    best = None
+    for i in range(len(cand)):
+        for j in range(i+1, len(cand)):
+            A, B = cand[i], cand[j]; dy = abs(A[1]-B[1]); dx = abs(A[0]-B[0]); sr = min(A[2], B[2])/max(A[2], B[2])
+            if dy < H*0.15 and W*0.12 < dx < W*0.6 and sr > 0.4:
+                sc = sr*100 - dy/5.0
+                if best is None or sc > best[0]: best = (sc, A, B)
+    if best: a, b = sorted([best[1], best[2]], key=lambda c: c[0])          # left-image, right-image
+    else: a, b = (W*0.33, H*0.45, W*0.2), (W*0.67, H*0.45, W*0.2)           # fallback default positions
+    ow, oh = W*0.22, W*0.17
+    return {"R": dict(ow=ow, oh=oh, seed=(a[0], a[1])), "L": dict(ow=ow, oh=oh, seed=(b[0], b[1]))}  # R eye = image-left
+
+def iris_win_at(gray, cx, cy):
+    """Auto-size the tracking window from the dark iris blob at a clicked seed (so ONE click is enough)."""
+    r = int(W*0.12); x0, y0 = max(0, int(cx-r)), max(0, int(cy-r)); x1, y1 = min(W, int(cx+r)), min(H, int(cy+r))
+    p = gray[y0:y1, x0:x1]
+    if p.size == 0: return W*0.13
+    d = cv2.morphologyEx((p < np.percentile(p, 30)).astype(np.uint8), cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    n, lab, st, cen = cv2.connectedComponentsWithStats(d, 8); lc = (cx-x0, cy-y0); best, bd = None, 1e18
+    for i in range(1, n):
+        dd = (cen[i][0]-lc[0])**2 + (cen[i][1]-lc[1])**2
+        if dd < bd and st[i, cv2.CC_STAT_AREA] > 20: bd, best = dd, i
+    if best is None: return W*0.13
+    rad = 0.5*max(st[best, cv2.CC_STAT_WIDTH], st[best, cv2.CC_STAT_HEIGHT])
+    return float(max(W*0.05, rad*2.5))                       # window*0.6 ~ eye half-width
+
+MSF = REPO / "manual_seeds.json"
+manual = json.load(open(MSF, encoding="utf-8")) if MSF.exists() else {}
+if CLIP in manual:
+    g0 = cv2.cvtColor(frame0, cv2.COLOR_BGR2GRAY); ent = manual[CLIP]; eyes = {}
+    for ek in ("R", "L"):
+        if ek in ent:                                        # 1 or 2 eyes -- use the clearer iris if only one
+            sx, sy = ent[ek]; ow = iris_win_at(g0, sx, sy); eyes[ek] = dict(ow=ow, oh=ow, seed=(sx, sy))
+    print(f"seeds: MANUAL {list(eyes)}")
+elif (GT / "meta.json").exists():
+    meta = json.load(open(GT / "meta.json", encoding="utf-8"))
+    def src_pts(e):
+        X0, Y0, s = e["X0"], e["Y0"], e["scale"]; return np.array([[x/s+X0, y/s+Y0] for x, y in e["orbit_crop"]], np.float32)
+    eyes = {}
+    for ek in ("L", "R"):
+        ents = sorted([v for v in meta.values() if v.get("eye") == ek and "orbit_crop" in v], key=lambda v: v["frame"])
+        if not ents: continue
+        ws, hs = [], []
+        for v in ents:
+            (cx, cy), (a1, a2), ang = cv2.fitEllipse(src_pts(v)); ws.append(max(a1, a2)); hs.append(min(a1, a2))
+        (cx0, cy0), _, _ = cv2.fitEllipse(src_pts(ents[0]))
+        eyes[ek] = dict(ow=float(np.median(ws)), oh=float(np.median(hs)), seed=(cx0, cy0))
+    print("seeds: clinician orbit marks")
+else:
+    eyes = auto_seed(frame0); print(f"seeds: AUTO  R={tuple(round(v) for v in eyes['R']['seed'])} L={tuple(round(v) for v in eyes['L']['seed'])}")
+
+cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 state = {ek: dict(cx=e["seed"][0], cy=e["seed"][1], lost=0) for ek, e in eyes.items()}
+MAXF = int(os.environ.get("RIT_MAXF", 100000))
 rows = []; found = {ek: 0 for ek in eyes}; fi = -1
 while True:
     ok, frame = cap.read()
-    if not ok: break
+    if not ok or fi+1 >= MAXF: break
     fi += 1; gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     for ek, e in eyes.items():
         st = state[ek]; grow = 1.0 + min(st["lost"], 6)*0.25

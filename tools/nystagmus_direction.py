@@ -17,7 +17,7 @@ CLIP = "nystagmus at rest to left in right vestibular neuritis"
 OUTDIR = REPO / "outputs" / f"{CLIP}_tracked" / "step2_fixed_circle"
 CSVF = Path(sys.argv[1]) if len(sys.argv) > 1 else OUTDIR / "step2_points.csv"
 TAG = CSVF.stem
-FPS = 30.0
+FPS = float(sys.argv[2]) if len(sys.argv) > 2 else 30.0   # pass the clip's real fps (25/30/39...)
 REFR = int(0.20*FPS)     # refractory: >= 0.2 s between beats (max 5/s)
 KCONJ = 3                # conjugacy window (frames) between the two eyes
 WDRIFT = int(0.40*FPS)   # window to estimate local slow-phase drift
@@ -61,15 +61,16 @@ def local_drift(v, i):
     seg = np.concatenate([v[a:max(a, i-2)], v[i+3:b]])
     return float(np.median(seg)) if seg.size else 0.0
 
+PRESENT = [ek for ek in ("L", "R") if valid[ek].any()]      # eyes actually tracked (1 or 2; conjugate)
+
 def combined(axis):
-    """Both eyes are conjugate -> COMBINE into one signal. Detrend only the VERY-slow head/camera drift (>3s)
-    so the nystagmus (cycles < ~2s) is KEPT, average both eyes (cuts per-eye noise). Velocity is NOT
-    high-passed -- the slow-phase drift IS the signal the asymmetry needs."""
-    L, R = pos["L"][axis], pos["R"][axis]
-    dL, dR = L-gsmooth(L, 90.0), R-gsmooth(R, 90.0)          # remove only head/camera drift slower than ~3s
-    comb = (dL+dR)/2
-    v = np.gradient(gsmooth(comb, 1.5))                      # keep the slow-phase drift velocity
-    vmask = valid["L"] | valid["R"]
+    """Use the PRESENT eye(s). Nystagmus is conjugate, so ONE clear iris is enough; if both are tracked,
+    average them (cuts per-eye noise). Detrend only the VERY-slow head/camera drift (>3s) so the nystagmus
+    (cycles < ~2s) is KEPT. Velocity is NOT high-passed -- the slow-phase drift IS the signal."""
+    ds = [pos[ek][axis]-gsmooth(pos[ek][axis], 90.0) for ek in PRESENT]
+    comb = np.mean(ds, 0) if ds else np.zeros(NF)
+    v = np.gradient(gsmooth(comb, 1.5))
+    vmask = np.any([valid[ek] for ek in PRESENT], 0) if PRESENT else np.zeros(NF, bool)
     return comb, v, vmask
 
 CONF_MIN = 0.30                                   # below this -> "no clear directional nystagmus"
@@ -110,20 +111,20 @@ def name_axis(fast, axis):
 # ---- GAZE ZONES: SCLERA-BALANCE / CANTHUS-PROXIMITY (anatomical, head-motion invariant) ----
 # per eye, balance = (sclera LEFT of iris - sclera RIGHT of iris)/(total). More sclera LEFT = iris shifted
 # image-right = patient looking LEFT. Combine both eyes. Extreme = one side's sclera ~0 (iris at a canthus).
-if has_scl:
-    bals = []; extreme = np.zeros(NF)
-    for ek in ("L", "R"):
+if has_scl and PRESENT:
+    bals = []; exs = []
+    for ek in PRESENT:
         nL, nR, _ = scl[ek]; tot = np.nan_to_num(nL)+np.nan_to_num(nR)
         b = np.where(tot > 0, (np.nan_to_num(nL)-np.nan_to_num(nR))/(tot+1e-9), np.nan)
         bals.append(interp_nan(b))
-        small = np.minimum(np.nan_to_num(nL), np.nan_to_num(nR))/(tot+1e-9)      # fraction on the thinner side
-        extreme += (small < 0.12).astype(float)
-    inst = 0.5*(bals[0]+bals[1])                          # instantaneous sclera balance (+1 = patient LEFT)
+        exs.append((np.minimum(np.nan_to_num(nL), np.nan_to_num(nR))/(tot+1e-9) < 0.12).astype(float))
+    inst = np.mean(bals, 0)                               # sclera balance over present eye(s) (+1 = patient LEFT)
+    extreme = np.mean(exs, 0)
     # SUSTAINED GAZE: suppress within-beat oscillation (~2s window) -> held eye position; reference to the
     # clip's habitual baseline (median) = primary. The nystagmus drift no longer moves the gaze zone.
     sustained = gsmooth(inst, 2.0*FPS)
     gaze = sustained - np.median(sustained)              # sustained gaze deviation from habitual/primary
-    ext = gsmooth(extreme/2.0, 2.0*FPS) > 0.5
+    ext = gsmooth(extreme, 2.0*FPS) > 0.5                     # eye(s) near a canthus (already a fraction)
     TG, TX = 0.25, 0.55
     zone = np.where(ext | (np.abs(gaze) > TX), np.where(gaze > 0, "extreme-left", "extreme-right"),
                     np.where(gaze > TG, "left", np.where(gaze < -TG, "right", "primary")))
