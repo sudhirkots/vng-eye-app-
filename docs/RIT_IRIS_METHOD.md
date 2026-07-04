@@ -502,6 +502,288 @@ R), and complete the fixed-R circle from the **best arc(s)** — one clean arc i
 withheld frame is safe, a confidently-wrong circle is not). **Do not change the radius, do not change the
 EllSeg anchor, do not add oval projection.**
 
+### Step 2c — Gaze-Oval Foreshortening Rule (Dr. K, 2026-07-04) — the next build (makes #18 concrete)
+> When the person looks **straight ahead** the iris is a **true circle** (radius R, locked). As the eye turns,
+> the **same fixed circle foreshortens into an oval**: the **LONG axis stays = 2R and is ALWAYS
+> PERPENDICULAR to the direction of gaze**; the **SHORT axis foreshortens along the gaze direction**
+> (short = 2R·cos θ). The **more the eye turns, the more it foreshortens** (smaller cos θ). Diagonal gaze
+> **tilts** the oval: looking down-and-right, the long axis tilts to ~10–11 o'clock ↔ 4–5 o'clock (i.e. at a
+> right angle to the down-right gaze). So the tracked iris **shape must change continuously with gaze.**
+
+**How the gaze is read (EllSeg location is the reliable signal — Step 1):** gaze = the **iris centre's
+displacement `g` from the straight-ahead (primary) position** (primary ≈ median iris centre over the good
+`fixed_circle_ok` frames, per eye).
+- **Direction** = `atan2(g_y, g_x)` → the **long-axis angle = gaze angle + 90°.**
+- **Magnitude** `|g|` → how far turned → sets **cos θ**. Model the eye as a sphere: the iris centre projects
+  to `|g| = D·sin θ`, so **cos θ = √(1 − (|g|/D)²)**, giving **minor = 2R·√(1 − (|g|/D)²)**, major = 2R.
+- **`D` (the displacement at which the iris would be edge-on)** is calibrated from data: on the two-sided
+  frames we already measure the visible medial-lateral width `w` (= the foreshortened minor at horizontal
+  gaze), so `D = |g| / √(1 − (w/2R)²)`, taken as a robust median. (Physiological sanity: `D ≈ 2R`.)
+
+**Build consequences:** replace the drawn fixed *circle* with this gaze-driven *oval* (major=2R fixed,
+minor=2R·cos θ, angle ⟂ gaze). Expected effect: the **currently-rescued / too-wide side-gaze frames**
+(f220, f264, f575 …) become **correctly drawn foreshortened ovals**; the Side-Gaze Rescue Gate then only has
+to catch true blinks/occlusions. Keep everything in `checkpoint/limbus-arc-rescue-gate` intact; add the oval
+on top. Still deferred after this: eyelid/canthus clipping, torsion, exact visible-sector shape.
+
+**Orientation correction (Dr. K, 2026-07-04) — the first oval build failed on TILT.** The oval **angle must
+come from anatomical gaze direction, NOT a noisy fitted-mask angle.** If the eye looks **down-right**, the
+long axis must tilt **anti-clockwise toward ~10 o'clock** (perpendicular to the down-right gaze); a
+**clockwise 1–2 o'clock tilt is anatomically wrong.** Frame corrections: **f220** = do NOT draw (keep
+`needs_rescue`, the oval is mis-placed); **f235** = gaze down-right → long axis anti-clockwise, not
+vertical/clockwise; **f286** = gaze down-right → long axis ~10 o'clock, not 1–2 o'clock.
+- **Split the two estimates:** **EllSeg disc *aspect* (temporally smoothed) → "how flat" (cos θ = minor/major
+  of the disc).** **Anatomical gaze → "which way tilted"** = direction from the eye-opening / sclera context
+  to the current iris (implemented: iris centroid − sclera centroid; long axis = that angle + 90°).
+- **EllSeg ellipse *angle* must NOT override anatomy** if it gives the wrong clockwise/anti-clockwise sense.
+- **Short version: use EllSeg for "how flat," anatomy for "which way tilted."**
+- **Confidence rescue:** if the app cannot determine the gaze *direction* confidently (oval is clearly flat
+  but the anatomical gaze vector is too weak/ambiguous), mark **`needs_rescue`** rather than drawing a
+  wrongly-tilted oval.
+
+### Step 2c-i — History-Based Iris Gaze Rule (Dr. K, 2026-07-04) — build the GAZE DIRECTION first, no oval yet
+*The first oval attempts failed on gaze DIRECTION (sclera-centroid gaze was noisy / sign-ambiguous). So PAUSE
+the oval and build a reliable gaze-direction layer on its own, judged on its own diagnostic.*
+> **Gaze direction is determined by the iris centre's MOVEMENT HISTORY from the primary/straight-ahead
+> position. Do NOT use the sclera centroid to decide gaze direction. Use sclera only for limbus/boundary
+> evidence.**
+
+**Implementation (`tools/step2c_gaze_history.py`):**
+1. Define the **primary (straight-ahead) iris centre** per eye from reliable open/frontal frames (frontal =
+   roundest EllSeg disc, aspect ≈ 1).
+2. Track the iris centre over time from the **EllSeg anchor** + the **refined fixed-radius circle centre when
+   reliable**.
+3. **Smooth the centre trajectory** over time so single-frame EllSeg shimmer cannot swing the gaze direction.
+4. Per frame: **gaze vector = smoothed current iris centre − primary centre.**
+5. If the current frame is uncertain/rescued, **infer gaze from the recent reliable trajectory**, not the
+   noisy current mask.
+6. If the trajectory direction itself is weak/unstable → **`ambiguous_gaze` / `needs_rescue`.**
+7. **Diagnostic shows ONLY the gaze layer** (no foreshortened oval): original frame, iris-centre
+   trace/history, primary centre, current smoothed centre, gaze arrow; and prints per key frame the primary,
+   raw EllSeg centre, refined centre, smoothed centre, gaze angle, magnitude, confidence, status.
+
+**PASS/FAIL:** does the gaze arrow point in the clinically correct direction through the side-gaze sequence,
+especially **f220 / f235 / f286 / f335**? If yes, this gaze vector later orients + foreshortens the oval.
+
+**Result (2026-07-04):** history-based trajectory is **smooth & confident** and the horizontal (L/R) sense
+is right, BUT it was measured as iris centre in **image coordinates** vs a fixed image-space primary, so
+**camera/head motion contaminated it** — max |gaze| ≈ 3.5× iris radius (physiologically impossible for eye
+rotation alone), inflating the vertical swings; f286 came out down-left vs the expected down-right. → gaze
+must be measured in a **head/camera-fixed eye-local frame**, not image coords. Hence Step 2c-ii below.
+
+### Step 2c-ii — Orbit Lock reference (Dr. K, 2026-07-04) — build BEFORE gaze/foreshortening
+*The apparent "head movement" is largely the **camera moving** while the head is still. Fix it with a
+head/camera-fixed **Orbit Lock**: an eye-local coordinate frame. Gaze = iris movement **inside the orbit
+frame**, not in image coordinates.*
+> Before computing gaze/foreshortening, build an **Orbit Lock** reference for each eye from clinician-approved
+> landmarks: **medial canthus, lateral canthus, upper eyelid margin, lower eyelid margin.** Track this orbit
+> frame through the clip. Gaze is iris movement inside this orbit frame.
+
+- **Horizontal anchors = medial & lateral canthus** (stable; define the eye's L↔R axis). **Vertical = upper &
+  lower eyelid margins** (NOT the eyebrow — brow moves independently). 4-point lock gives a true vertical
+  opening axis and lets us measure whether the iris moved up/down *inside the lids*.
+- **Eye-local frame:** origin = opening centre; x-axis = medial→lateral canthus; y-axis ⟂ x; scale_x =
+  canthus distance, scale_y = lid opening height. Iris-in-orbit gaze = iris centre projected onto (x,y),
+  normalized by (scale_x/2, scale_y/2) → **head/camera-motion cancelled.**
+- **Start from the clinician marks we already have:** the RIT Orbit Lock ground truth (`meta.json`,
+  42 marked eye-opening almonds, L 23 / R 19 frames) → derive the 4 landmarks per marked frame (PCA principal
+  axis = canthi; minor axis = lid mids) and **interpolate/track** them across the clip.
+- **Diagnostic (`tools/orbit_lock.py`):** overlay on the video the **canthus line, upper/lower lid reference,
+  eye-local axes, and iris centre**; confirm the orbit frame **follows the eye/head/camera smoothly** (canthus
+  distance + orbit centre trajectories should be smooth) BEFORE using it for gaze. Once stable, gaze
+  direction becomes much cleaner.
+
+### Rigid Canthus Frame Rule (Dr. K, 2026-07-04) — the orbit lock must be RIGID, not loose
+*First orbit-lock attempt was too flexible: interpolating the 4 landmarks independently let the inter-canthus
+distance wander 540→676px (25%). The canthi were sliding along the lids — that is NOT a lock.*
+> The **medial and lateral canthus points define the fixed eye-socket frame.** They may move together with the
+> head/camera, but their **distance and relative position to each other must stay stable.** They cannot drift
+> independently or slide along the eyelids.
+
+**The app must NOT re-detect canthi loosely each frame. It must:**
+1. Mark/approve medial + lateral canthus **once.**
+2. Track them as a **RIGID PAIR.**
+3. Preserve: **canthus-to-canthus distance, canthus-line direction, midpoint relationship, eye-local scale.**
+4. Allow only **global** motion of the whole pair: translation, small rotation, and *very small* scale change
+   only if the video actually zooms.
+5. **Reject independent canthus jumps.** If the tracker cannot preserve the rigid pair, **carry forward the
+   previous canthus frame and mark low confidence.**
+
+**Implementation:** parameterise the pair by **midpoint + angle + inter-canthus distance** (not the two points
+separately). Reconstruct canthi = midpoint ± (dist/2)·(cos θ, sin θ) so the pair is rigid BY CONSTRUCTION;
+distance/angle are heavily smoothed (slow zoom OK, jitter rejected). **Diagnostic must plot inter-canthus
+distance and canthus angle over time** — the eye may move *inside* the frame, but the canthus anchors must not
+wander (distance ≈ flat, angle ≈ flat).
+
+### Clinician-Marked Canthus Lock (Dr. K, 2026-07-04) — TRACK the marked texture, don't interpolate
+*Treat the clinician's canthus marks as FIXED anatomical anchors, not points to rediscover freely. In the
+video image the canthi may move (head/camera); in the eye-local frame they must not move relative to each
+other.*
+> Once the clinician marks medial + lateral canthus, those two points define a **rigid eye frame**. The
+> tracker may move the **entire frame** with the face/head/camera, but it may **not change the canthus
+> distance or let one canthus drift independently.**
+
+**Enforcement (`tools/orbit_lock.py`):** (1) **template-track small patches** around each canthus (local
+skin/canthus texture, optical flow) frame-to-frame; (2) **rigid-pair constraint** — solve ONE shared
+transform (translation + small rotation + optional tiny scale) for both canthi, never independent motion;
+(3) **distance lock** — inter-canthus distance ~constant, reject updates beyond a small tolerance; (4)
+**angle smoothing** — canthus-line angle changes smoothly, never jumps; (5) **carry-forward on failure** —
+if tracking confidence drops, freeze/keep the previous canthus frame rather than invent new points; (6)
+**manual-correction checkpoints** — clinician can correct the canthi on a frame and restart the rigid lock
+from there. The ~20 clinician marks per eye are the re-anchor points that correct accumulated drift.
+
+### Absolute Intercanthus Distance Lock (Dr. K, 2026-07-04) — HARD constraint
+> The distance between medial and lateral canthus is **fixed**. Once marked, it must remain **constant** for
+> that eye throughout the clip. The tracker may **translate or rotate** the canthus pair with the head/camera,
+> but it may **not stretch, shrink, or let either canthus move independently.**
+
+**Allowed:** whole pair shifts together · whole pair rotates slightly. **NOT allowed:** distance changes ·
+one canthus slides while the other stays · scaling · stretching · re-detecting a canthus independently.
+
+**Implementation:** store `D_canthi` (median of the clinician marks) ONCE per eye. Every frame estimates only
+rigid **translation** (optical flow of the midpoint) + **rotation** (smoothed mark angle) — **no scale.**
+Canthi are reconstructed **CL/CR = midpoint ± (D_canthi/2)·(cos θ, sin θ)**, so the pair *cannot* stretch or
+slide independently by construction; any flow that would change the distance is projected back onto the
+fixed-distance pair, and implausible jumps freeze the frame. Verified: inter-canthus distance spread = **0.0%**
+across all 640 frames (568px L, 575px R). This rigid canthus frame is the head-fixed reference for iris motion.
+
+## GOAL REFRAME — Clinical Nystagmus Direction Rule (Dr. K, 2026-07-04) — the new primary output
+*Stop chasing a perfect VNG-grade continuous trace / perfect iris boundary. Aim for the clinically useful
+answer instead.*
+> The primary output is **NOT** a perfect VNG trace or a pixel-perfect iris mask. The primary output is
+> **whether there is rhythmic jerk nystagmus and, if present, the fast-phase direction.**
+
+**Why this is achievable now:** it needs only a **reasonably stable eye-position signal** (roughly attached to
+the iris, smooth after filtering, not jumping to lid/skin), then a **pattern** on top: slow drift one way →
+fast corrective jerk the other way → repeated rhythm → consistent direction. Crucially, **fast phases are
+FAST and head/camera drift is SLOW**, so fast-jerk detection is inherently robust to the head-motion problem —
+we do NOT need the perfect orbit lock for direction.
+
+**Ignore:** isolated voluntary saccades · irregular non-rhythmic movement · blinks · low-confidence /
+`needs_rescue` frames · gross head/camera motion (slow).
+
+**Practical algorithm (`tools/nystagmus_direction.py`):**
+1. Use the EllSeg / fixed-radius centre only as a **rough eye-position signal** (the existing marker's centre
+   trace is enough if it's reasonably stable).
+2. **Smooth** to remove shimmer; **detrend** slow head/camera drift (high-pass) so only eye movement remains.
+3. **Detect fast jumps** (fast phases) in the trace by velocity peaks.
+4. Check whether the jumps **repeat rhythmically** (regular inter-jerk intervals).
+5. Check whether their **direction is consistent.**
+6. If repeated + consistent → report **right- / left- / up- / down- / oblique-beating.**
+7. If irregular → **irregular / voluntary-like / no rhythmic nystagmus detected.**
+
+**New standard:** *"Does the trace show rhythmic fast jerks with a consistent direction?"* — NOT *"does the red
+mask perfectly match the iris boundary?"* **Test:** run the marker → plot horizontal + vertical iris position
+over time → overlay detected fast phases as arrows → judge: rhythmic? consistent direction? matches clinically?
+irregular/voluntary rejected? (Ground truth for this clip: right vestibular neuritis → **left-beating**
+horizontal nystagmus.) If yes, use this marker + build the classifier on top.
+
+### Fast-Phase Acceptance Rule (Dr. K, 2026-07-04) — detect BEATS, not velocity spikes
+*First detector over-called: it marked every sharp slope change as a jerk (both red and blue arrows) when the
+clinical pattern is **slow rightward drift + fast leftward corrective jerks** (left-beating, unidirectional).
+The fix: don't label every velocity spike a fast phase.*
+> First establish the **dominant slow-phase direction** over a local window. Then accept only fast phases that
+> are **brisk, conjugate in both eyes, and OPPOSITE to that slow phase.** Rightward candidate jerks are rejected
+> unless they form their OWN repeated conjugate rhythm.
+
+**A true fast phase must:** (1) be **much faster** than the surrounding slow drift; (2) occur in **both eyes at
+nearly the same time**; (3) have the **same direction in both eyes**; (4) be **preceded/followed by slow drift
+in the opposite direction**; (5) **repeat rhythmically**; (6) obey a **refractory interval** (one beat counted
+once). **Reject reasons to log:** `wrong_direction`, `not_conjugate`, `too_small`, `not_rhythmic`,
+`low_confidence`, `duplicate`. **Plot:** accepted beats red, rejected candidates grey. **Print the dominant
+diagnosis:** left-beating / right-beating / vertical / no rhythmic nystagmus. (This clip → **left-beating**.)
+
+### Windowed Slow-Phase Asymmetry Rule (Dr. K, 2026-07-04) — the clinician-style LOW-FPS detector
+*Do NOT conclude "undetectable at 30 fps" just because strict fast-phase detection finds few crisp spikes. A
+human can SEE the nystagmus in this clip → the DIRECTION is there. 30 fps limits precise fast-phase VELOCITY,
+but usually not DIRECTION. The fix: behave like a clinician — use context over a window, not individual
+spikes.*
+> At 30 fps, do NOT detect fast phases directly. **Detect the rhythmic slow-phase drift + reset pattern.**
+> Report the fast-phase direction as **OPPOSITE the dominant slow-phase drift**, with a **confidence** — do
+> not require a crisp sawtooth spike in every beat.
+
+**Method:** on the **combined (both-eyes)** eye-velocity (keep the slow-phase drift — only remove head/camera
+drift slower than ~3 s), measure **motion asymmetry** over the clip and in sliding windows: (a) **time
+asymmetry** — the eye spends MORE frames drifting one way (slow phase); (b) **speed asymmetry** — the opposite
+direction is FASTER but briefer (fast phase); (c) **velocity skew** — the rare high-velocity tail points to the
+fast phase. When these **agree**, the fast phase = that direction; **confidence** = agreement × strength ×
+**cross-window consistency**. Pick the axis (H/V) with the stronger, more consistent asymmetry; if below
+threshold → "no clear directional nystagmus." (Higher fps 60/120 is better for rate/velocity, but must NOT be
+required for a directional answer from a visibly-positive 30 fps clip.) *Result (2026-07-04, ellseg_centroid,
+30 fps): horizontal **LEFT-beating** correctly dominant over vertical (conf 0.21 vs 0.06) — direction IS
+recoverable at 30 fps; confidence modest due to residual head/gaze motion in the raw centroid.*
+
+### Gaze-Zone Nystagmus Classification Rule (Dr. K, 2026-07-04) — classify by WHERE the eye looks
+*Do NOT collapse the whole clip into one label. A gaze-evoked / direction-changing diagnosis depends on gaze
+position (Alexander's law).*
+> Divide the video into **primary, left-gaze, and right-gaze** segments based on iris position. Run the
+> windowed slow-phase asymmetry detector **separately in each segment.** Report whether nystagmus is present
+> and its direction in each gaze position.
+
+**Method:** use the **smoothed horizontal iris position** (excursion from the clip's primary/median, both eyes,
+beats removed) to bin frames into **primary / left / right** gaze zones. Run the asymmetry detector in each
+zone; a zone needs **enough data** (≥ ~1.5 s) or report "not enough data." **Clinical summary table:**
+`gaze zone | frames | direction (L/R/U/D-beating) | H-vs-V | confidence | rhythmic/irregular | enough data`.
+E.g. left-beating in primary + left gaze but absent in right gaze = Alexander's-law spontaneous nystagmus;
+direction that changes with gaze = gaze-evoked.
+
+**FIRST ATTEMPT FAILED — image-frame zoning is head-motion-contaminated (2026-07-04):** binning by absolute
+image position split a *"nystagmus at rest"* clip (patient in primary throughout) into false L/R gaze zones —
+the "gaze" wander was head/camera motion, not gaze. Fix = the anatomical rule below.
+
+### Sclera-Balance / Canthus-Proximity Gaze Zone Rule (Dr. K, 2026-07-04)
+> Gaze zone is classified by **where the iris sits inside the eye-opening almond**, using **visible sclera
+> balance and canthus proximity** — NOT from raw image-frame motion. (This is head/camera-motion invariant by
+> construction: it measures the iris *within the eye's own anatomy*.)
+
+1. **Primary / center:** iris near the middle of the almond; sclera present on **both sides, roughly
+   balanced.** Small deviations up to ~15–20° still count as primary.
+2. **Looking right:** both irises shift toward the patient's right; sclera becomes more visible on the
+   opposite side; iris clearly off-centre but **not at the canthus.**
+3. **Looking left:** mirror of (2) toward the patient's left.
+4. **Extreme right / extreme left:** iris **near or partly hidden by the canthus**, may be a narrow
+   oval/sliver → **label separately** (tracking + nystagmus interpretation less reliable).
+
+**Implementation:** for each eye estimate iris position within the almond from **relative sclera width on the
+two sides of the iris** + **proximity to medial/lateral canthus**; combine both eyes → one gaze zone per
+frame (primary / left / right / extreme-left / extreme-right); if eyes disagree or confidence low → **uncertain**.
+Then run the asymmetry detector per zone. **Output ONLY a table:** `zone | time | nystagmus direction |
+confidence | notes`.
+
+### Sustained Gaze Zone Rule (Dr. K, 2026-07-04) — don't let the nystagmus move the gaze zone
+*Frame-by-frame zoning was fooled by the nystagmus itself: in left-beating nystagmus the eye spends most of
+each beat drifting rightward (slow phase), so a per-frame sclera-balance binned an at-rest clip as "right
+gaze." The nystagmus was split across zones by its own drift.*
+> Gaze zone is **NOT assigned frame by frame** from the instantaneous iris position. It is assigned over a
+> **sustained time window.** Nystagmus oscillations within that window must **not** move the patient between
+> primary/left/right zones.
+
+**Method:** take the sclera-balance signal, **suppress within-beat oscillation** (smooth over a multi-second
+window, ~2 s) to get the **sustained/held** eye position; reference it to the clip's **habitual baseline**
+(median sustained position = primary); classify the **held** gaze from that (primary / left / right /
+extreme). Then run the nystagmus detector inside each **sustained gaze segment.** For a spontaneous-nystagmus
+at-rest clip the patient is clinically in **primary gaze throughout** (even though the iris drifts right in
+the slow phase) → the whole clip = **primary gaze, left-beating.**
+
+### Nose-Bridge Anchor + Mostly-Rigid Nasal Canthus Frame (Dr. K, 2026-07-04)
+*The eye-region texture (lids/lashes/skin) is NOT rigid — it moves with blinks/lids — so the flow-tracked
+midpoint drifts and the medial canthus wanders (seen at f12/f591). Anchor to the NOSE BRIDGE instead: rigid
+bone/skin that does not move with gaze, lids, or blinks, and is easy to track.*
+> The nasal-canthus geometry is anatomically fixed, but its 2D projection may change slightly with head yaw.
+> Keep the triangle **rigid for ordinary frames**, but allow small smooth perspective changes when the whole
+> head turns. **Do not allow sudden independent drift.**
+
+- **Track the nose bridge** (stable central landmark, shared by both eyes = one rigid skull) and pin each eye's
+  **medial canthus at a fixed offset from the bridge** (rotated by the small head angle). Lateral canthus =
+  medial + `D_canthi` along the axis. One stable bridge point + fixed D_canthi + small angle fully determines
+  the 4-point frame; nothing floats.
+- **Perspective note:** under head **yaw** the 2D triangle genuinely changes (far side shorter, bridge shifts
+  vs canthi, line tilts/compresses). So a pure 2D no-scale triangle is best only when yaw is small.
+- **Staging (Dr. K):** (1) **NOW — strict no-scale rigid nasal-canthus frame** (best for stabilizing this
+  mostly-frontal video, prevents drift); (2) later — 2D similarity/affine face transform from more landmarks
+  for head pose; (3) large yaw — 3D face model (overkill now). **At this checkpoint prioritize preventing
+  medial-canthus drift over modeling yaw.**
+
 **Support must be EllSeg-disc / limbus evidence — NOT generic Otsu dark** (Dr. K, 2026-07-04). Lid shadow and
 skin shadow count as "dark", so a circle drawn **below the eyelid / on skin** can score high against a dark
 mask (this wrongly passed f220). Measure support against the **EllSeg iris disc** and the **true medial/lateral

@@ -54,6 +54,15 @@ GitHub (durable), + a matching commit message `Lock <rule name>`.
     valid medial/lateral arc; else `needs_rescue`, carry forward last good). Verified by full-clip rescue
     sweep: rescues are side-gaze/blink/occlusion/drifted-fit, no good open frame withheld. Foreshortening NOT
     yet added (deferred). (Supersedes the never-tagged intermediate "fixed-base-radius" state.)
+  - `checkpoint/nystagmus-direction-primary-gaze-zones` — **GOAL REFRAMED to clinical nystagmus-direction
+    detection** (not perfect iris geometry). Pipeline: `tools/ellseg_centroid_trace.py` (clean EllSeg centroid
+    + per-eye sclera balance) → `tools/nystagmus_direction.py` (windowed slow-phase asymmetry detector +
+    Sustained Gaze-Zone classification by sclera-balance/canthus-proximity, head-motion invariant). Correctly
+    calls the right-vestibular-neuritis clip: **primary gaze, LEFT-beating (conf 0.34)** at 30 fps. Rules in
+    `docs/RIT_IRIS_METHOD.md`: Clinical Nystagmus Direction, Fast-Phase Acceptance, Windowed Slow-Phase
+    Asymmetry, Sclera-Balance Gaze Zone, Sustained Gaze Zone. Note: 30 fps undersamples the fast phase (no beat
+    rate) — direction only; 60/120 fps recommended for rate. Orbit-lock tools (`tools/orbit_lock*.py`,
+    `rit_orbit_lock_marker_v2.html`) built this session but NOT needed for the direction answer.
 - To return to a stage: `git fetch origin --tags` then `git checkout checkpoint/<name>`.
 
 ## Current direction (RIT = Rescue Iris Tracker)

@@ -44,7 +44,7 @@ OUTDIR = OUTBASE / "step2_fixed_circle"
 OUTDIR.mkdir(parents=True, exist_ok=True)
 OPH, OPW = 240, 320
 DIAG_EYE = "R"
-DIAG_FRAMES = [40, 100, 160, 220, 286, 335, 400, 470, 540, 610]   # spread across the clip
+DIAG_FRAMES = [40, 100, 160, 220, 235, 286, 335, 400, 470, 610]   # spread across the clip (+235,286 = side gaze)
 COV_GOOD = 150      # deg of limbus arc that counts as strong "full-circle" evidence for calibration
 RES_GOOD = 0.12     # max relative fit residual (residual / r) for calibration frames
 SUPPORT_MIN = 0.45  # SIDE-GAZE RESCUE GATE cond.1b: min fraction of the fixed circle overlapping the EllSeg DISC
@@ -261,8 +261,20 @@ while True:
             dys, dxs = np.where(reg["disc"])                   # store EllSeg disc compactly (bbox submask) for the gate
             dbb = (int(dxs.min()), int(dys.min()), int(dxs.max())+1, int(dys.max())+1)
             dm = reg["disc"][dbb[1]:dbb[3], dbb[0]:dbb[2]].copy()
+            # STEP 2c: "how flat" from EllSeg disc ASPECT; "which way tilted" from ANATOMY (iris - sclera).
+            asp = 1.0                                              # disc aspect = minor/major of the EllSeg disc
+            dcs, _ = cv2.findContours(reg["disc"], cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if dcs:
+                dcm = max(dcs, key=cv2.contourArea)
+                if len(dcm) >= 5:
+                    (_, _), (da1, da2), _ = cv2.fitEllipse(dcm)
+                    asp = min(da1, da2) / max(da1, da2, 1e-6)
+            Ms = cv2.moments(sclera)                               # anatomical gaze DIRECTION: sclera centroid -> iris
+            scx, scy = (Ms["m10"]/Ms["m00"], Ms["m01"]/Ms["m00"]) if Ms["m00"] > 0 else (reg["cx"], reg["cy"])
+            gdir = (reg["cx"] - scx, reg["cy"] - scy)
             cache[(fi, ek)] = dict(win=(x0, y0, x1, y1), pts=pts, seed=(reg["cx"], reg["cy"]),
-                                   free_r=fr, cov=cov, res=res, width=width, disc_bb=dbb, disc_m=dm)
+                                   free_r=fr, cov=cov, res=res, width=width, disc_bb=dbb, disc_m=dm,
+                                   aspect=asp, gdir=gdir)
         if ek == DIAG_EYE and fi in DIAG_FRAMES and (fi, ek) in cache:
             diag_raw[fi] = dict(crop=bgr_c.copy(), disc=reg["disc"].copy(), sclera=sclera.copy(),
                                 dark=dark.copy(), seed=(reg["cx"], reg["cy"]), pts=cache[(fi, ek)]["pts"].copy())
@@ -282,6 +294,34 @@ for ek in eyes:
         R[ek] = float(np.median(frs)) if frs.size else 40.0
         print(f"[calibrate] {ek}: base R = {R[ek]:.1f}px  (FALLBACK median free-r; only {arr.size} two-sided frames)")
 
+# STEP 2c — temporally SMOOTH the disc-aspect ("how flat") and the anatomical gaze direction ("which way"),
+# per eye, to kill EllSeg's frame-to-frame jitter while keeping the gaze-driven trend.
+CTH_FLOOR = 0.22        # flattest oval we allow
+DIR_CONF = 0.22         # |gdir| (as fraction of R) needed to trust the tilt direction when the oval is flat
+def _roll_med(vals, w=9):
+    n = len(vals); out = np.array(vals, float); h = w // 2
+    for i in range(n): out[i] = np.median(vals[max(0, i-h):i+h+1])
+    return out
+for ek in eyes:
+    fs = sorted(f for (f, e2) in cache if e2 == ek)
+    if not fs: continue
+    asp = _roll_med(np.array([cache[(f, ek)]["aspect"] for f in fs]))
+    gx = _roll_med(np.array([cache[(f, ek)]["gdir"][0] for f in fs]))
+    gy = _roll_med(np.array([cache[(f, ek)]["gdir"][1] for f in fs]))
+    for k, f in enumerate(fs):
+        cache[(f, ek)]["cth"] = float(np.clip(asp[k], CTH_FLOOR, 1.0))
+        cache[(f, ek)]["gdir_s"] = (float(gx[k]), float(gy[k]))
+    print(f"[oval] {ek}: disc-aspect cth {asp.min():.2f}-{asp.max():.2f}; "
+          f"|gdir| median {np.median(np.hypot(gx, gy)):.0f}px (R={R[ek]:.0f})")
+
+def make_oval(cth, gdir, Rk):
+    """major = 2R (fixed). minor = 2R*cos th, cos th = smoothed EllSeg disc aspect (how flat). Long axis angle
+    = anatomical gaze direction + 90 (which way tilted). Returns (major, minor, ang, cth, |gdir|)."""
+    gn = float(math.hypot(gdir[0], gdir[1]))
+    major = 2.0 * Rk; minor = major * cth
+    ang = (math.degrees(math.atan2(gdir[1], gdir[0])) + 90.0) if gn > 2 else 0.0
+    return major, minor, ang, cth, gn
+
 # ================= PASS 2 — no EllSeg; fixed-R centre fit + SIDE-GAZE RESCUE GATE + render =================
 def gate_support(disc, ctr, Rk):
     """SIDE-GAZE RESCUE GATE metric: fraction of the fixed-R circle that overlaps the EllSeg IRIS DISC.
@@ -294,6 +334,13 @@ def gate_support(disc, ctr, Rk):
 
 def disc_from_cache(c, shape):
     disc = np.zeros(shape, np.uint8); x0, y0, x1, y1 = c["disc_bb"]; disc[y0:y1, x0:x1] = c["disc_m"]; return disc
+
+def oval_support(disc, ctr, major, minor, ang):
+    """Fraction of the projected OVAL that overlaps the EllSeg iris disc (the Step-2c gate metric)."""
+    ov = np.zeros(disc.shape, np.uint8)
+    cv2.ellipse(ov, (int(ctr[0]), int(ctr[1])), (int(major/2), int(minor/2)), ang, 0, 360, 1, -1)
+    a = int(ov.sum())
+    return int(((ov > 0) & (disc > 0)).sum()) / max(1, a)
 
 def gate_decision(disc, seed, pts, ctr, Rk):
     """TWO conditions, BOTH required for fixed_circle_ok (Dr. K, 2026-07-04):
@@ -311,7 +358,7 @@ def gate_decision(disc, seed, pts, ctr, Rk):
 cap = cv2.VideoCapture(str(VIDEO))
 vw = cv2.VideoWriter(str(OUTDIR / "step2_fixed_circle.mp4"), cv2.VideoWriter_fourcc(*"mp4v"), FPS, (W, H))
 trace = []; last_good = {ek: None for ek in eyes}; status_diag = {}; rescued_info = []
-counts = {ek: {"ok": 0, "rescue": 0} for ek in eyes}
+counts = {ek: {"circle": 0, "oval": 0, "rescue": 0} for ek in eyes}
 fi = -1
 while True:
     ok, frame = cap.read()
@@ -324,44 +371,53 @@ while True:
         x0, y0, x1, y1 = c["win"]; pts = c["pts"]; Rk = R[ek]
         disc = disc_from_cache(c, (y1-y0, x1-x0))
         ctr = fit_centre_fixed(pts, Rk, np.array(c["seed"], float))
-        ok_frame, support, dist = gate_decision(disc, c["seed"], pts, ctr, Rk)
+        major, minor, ang, cth, gn = make_oval(c["cth"], c["gdir_s"], Rk)   # STEP 2c gaze-oval
+        support = oval_support(disc, ctr, major, minor, ang)           # gate measured on the OVAL vs EllSeg disc
+        dist = float(np.hypot(ctr[0]-c["seed"][0], ctr[1]-c["seed"][1]))
+        dir_ok = (cth >= 0.85) or (gn >= DIR_CONF * Rk)                # flat oval needs a confident tilt direction
+        ok_frame = (len(pts) >= MINARC) and (dist <= ANCHOR_MAX*Rk) and (support >= SUPPORT_MIN) and dir_ok
         for px, py in pts.astype(int):                                   # limbus arc points (small yellow)
             cv2.circle(frame, (px + x0, py + y0), 1, (0, 220, 220), -1)
         if ok_frame:
             cx, cy = float(ctr[0] + x0), float(ctr[1] + y0)
-            cv2.circle(frame, (int(cx), int(cy)), int(round(Rk)), (0, 0, 255), 2)   # confident FIXED-R circle (red)
+            cv2.ellipse(frame, (int(cx), int(cy)), (int(major/2), int(minor/2)), ang, 0, 360, (0, 0, 255), 2)  # gaze-oval (red)
             cv2.circle(frame, (int(cx), int(cy)), 4, (0, 255, 255), -1)             # centre (yellow)
-            last_good[ek] = (cx, cy, Rk); counts[ek]["ok"] += 1; st_lab = "fixed_circle_ok"
-            trace.append((fi, ek, round(cx, 2), round(cy, 2), round(Rk, 1), len(pts), round(support, 2), st_lab))
-        else:                                                            # SIDE-GAZE RESCUE: withhold; carry forward
+            last_good[ek] = (cx, cy, major, minor, ang)
+            near_circle = cth >= 0.92
+            counts[ek]["circle" if near_circle else "oval"] += 1
+            st_lab = "fixed_circle_ok" if near_circle else "projected_oval_ok"
+            trace.append((fi, ek, round(cx, 2), round(cy, 2), round(Rk, 1), round(cth, 3), round(support, 2), st_lab))
+        else:                                                            # withhold; carry forward last good oval
             counts[ek]["rescue"] += 1; st_lab = "needs_rescue"
             reasons = []
             if len(pts) < MINARC: reasons.append("no_valid_arc")
             if dist > ANCHOR_MAX * Rk: reasons.append("far_from_anchor")
             if support < SUPPORT_MIN: reasons.append("low_disc_support")
+            if not dir_ok: reasons.append("ambiguous_gaze")
             rescued_info.append((fi, ek, support, dist, len(pts) >= MINARC, "+".join(reasons), (x0, y0, x1, y1)))
             if last_good[ek] is not None:
-                cx, cy, Rk2 = last_good[ek]
-                cv2.circle(frame, (int(cx), int(cy)), int(round(Rk2)), (150, 150, 150), 1)   # faint carried circle
+                cx, cy, mj, mn, an = last_good[ek]
+                cv2.ellipse(frame, (int(cx), int(cy)), (int(mj/2), int(mn/2)), an, 0, 360, (150, 150, 150), 1)  # faint carried oval
                 cv2.putText(frame, "needs_rescue", (x0, max(18, y0-6)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
-                trace.append((fi, ek, round(cx, 2), round(cy, 2), round(Rk2, 1), len(pts), round(support, 2), st_lab))
+                trace.append((fi, ek, round(cx, 2), round(cy, 2), round(Rk, 1), round(cth, 3), round(support, 2), st_lab))
             else:
                 cv2.putText(frame, "needs_rescue", (x0, max(18, y0-6)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
         if ek == DIAG_EYE and fi in DIAG_FRAMES:
-            status_diag[fi] = (st_lab, support, dist)
-    cv2.putText(frame, f"f{fi}  STEP2 fixed-R + rescue gate", (20, 55), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 0, 0), 6)
-    cv2.putText(frame, f"f{fi}  STEP2 fixed-R + rescue gate", (20, 55), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (255, 255, 255), 2)
+            status_diag[fi] = (st_lab, support, dist, cth)
+    cv2.putText(frame, f"f{fi}  STEP2c gaze-oval + rescue gate", (20, 55), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 0, 0), 6)
+    cv2.putText(frame, f"f{fi}  STEP2c gaze-oval + rescue gate", (20, 55), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (255, 255, 255), 2)
     vw.write(frame)
 cap.release(); vw.release()
 
 with open(OUTDIR / "step2_points.csv", "w", newline="", encoding="utf-8") as fp:
-    w = csv.writer(fp); w.writerow(["frame", "eye", "cx", "cy", "R", "n_limbus", "support", "status"])
+    w = csv.writer(fp); w.writerow(["frame", "eye", "cx", "cy", "R", "cos_theta", "support", "status"])
     w.writerows(trace)
 print("gate:", {ek: counts[ek] for ek in eyes})
-print(f"--- {DIAG_EYE}-eye status at diagnostic frames (need f220 = needs_rescue) ---")
+print(f"--- {DIAG_EYE}-eye status at diagnostic frames ---")
 for f in DIAG_FRAMES:
     if f in status_diag:
-        lab, sup, dist = status_diag[f]; print(f"  f{f}: {lab:16s} support={sup:.2f} dist={dist:.0f}px (R={R[DIAG_EYE]:.0f})")
+        lab, sup, dist, cth = status_diag[f]
+        print(f"  f{f}: {lab:18s} support={sup:.2f} dist={dist:.0f}px cos_th={cth:.2f} (minor/major)")
 
 # ---- diagnostic montage (DIAG_EYE): original / EllSeg anchor / limbus points / fitted fixed-R circle ----
 PW = 300
@@ -378,17 +434,27 @@ for f in DIAG_FRAMES:
     p3 = crop.copy(); p3[sclera > 0] = (0.7*p3[sclera > 0] + np.array([255, 60, 0])*0.3).astype(np.uint8)
     for px, py in pts.astype(int): cv2.circle(p3, (px, py), 2, (0, 0, 255), -1)
     p4 = crop.copy()
-    ctr = fit_centre_fixed(pts, R[DIAG_EYE], np.array(d["seed"], float))
-    okf, support, _dist = gate_decision(d["disc"], d["seed"], pts, ctr, R[DIAG_EYE])
-    col = (0, 200, 0) if okf else (0, 165, 255)                     # green=ok, orange=needs_rescue
+    ek = DIAG_EYE; Rk = R[ek]; cc = cache[(f, ek)]
+    ctr = fit_centre_fixed(pts, Rk, np.array(d["seed"], float))
+    major, minor, ang, cth, gn = make_oval(cc["cth"], cc["gdir_s"], Rk)
+    support = oval_support(d["disc"], ctr, major, minor, ang)
+    dir_ok = (cth >= 0.85) or (gn >= DIR_CONF * Rk)
+    okf = (len(pts) >= MINARC) and (float(np.hypot(ctr[0]-d["seed"][0], ctr[1]-d["seed"][1])) <= ANCHOR_MAX*Rk) and (support >= SUPPORT_MIN) and dir_ok
+    cv2.circle(p4, (int(ctr[0]), int(ctr[1])), int(round(Rk)), (255, 120, 0), 1)   # OLD fixed circle (thin blue), compare
+    gv = cc["gdir_s"]; gnn = math.hypot(*gv) + 1e-6                                 # anatomical gaze arrow (magenta)
+    cv2.arrowedLine(p4, (int(ctr[0]), int(ctr[1])), (int(ctr[0]+gv[0]/gnn*40), int(ctr[1]+gv[1]/gnn*40)), (255, 0, 255), 2, tipLength=0.3)
     if okf:
-        cv2.circle(p4, (int(ctr[0]), int(ctr[1])), int(round(R[DIAG_EYE])), col, 2)
+        col = (0, 0, 255) if cth < 0.92 else (0, 200, 0)           # red oval / green near-circle
+        cv2.ellipse(p4, (int(ctr[0]), int(ctr[1])), (int(major/2), int(minor/2)), ang, 0, 360, col, 2)   # NEW gaze-oval
+        lab = "projected_oval_ok" if cth < 0.92 else "fixed_circle_ok"
     else:
-        cv2.circle(p4, (int(ctr[0]), int(ctr[1])), int(round(R[DIAG_EYE])), (150, 150, 150), 1)   # withheld -> faint
+        col = (0, 165, 255)
+        cv2.ellipse(p4, (int(ctr[0]), int(ctr[1])), (int(major/2), int(minor/2)), ang, 0, 360, (150, 150, 150), 1)   # withheld -> faint
+        lab = "needs_rescue"
     cv2.circle(p4, (int(ctr[0]), int(ctr[1])), 4, col, -1)
-    lab = "fixed_circle_ok" if okf else "needs_rescue"
-    cv2.putText(p4, f"{lab} s={support:.2f}", (6, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 3)
-    cv2.putText(p4, f"{lab} s={support:.2f}", (6, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.55, col, 1)
+    txt = f"{lab} cth={cth:.2f} s={support:.2f}"
+    cv2.putText(p4, txt, (6, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 3)
+    cv2.putText(p4, txt, (6, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, col, 1)
     panels = [fitw(p) for p in (p1, p2, p3, p4)]
     hmax = max(p.shape[0] for p in panels)
     panels = [cv2.copyMakeBorder(p, 0, hmax-p.shape[0], 0, 0, cv2.BORDER_CONSTANT) for p in panels]
@@ -398,7 +464,7 @@ for f in DIAG_FRAMES:
     rows.append(row)
 if rows:
     head = np.full((30, rows[0].shape[1], 3), 20, np.uint8)
-    for i, lab in enumerate(["ORIGINAL", "EllSeg ANCHOR", "TRUE LIMBUS (med/lat, sclera)", f"FIXED-R circle"]):
+    for i, lab in enumerate(["ORIGINAL", "EllSeg ANCHOR", "TRUE LIMBUS (med/lat, sclera)", "GAZE-OVAL vs circle"]):
         cv2.putText(head, lab, (i*(PW+3)+6, 21), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 255), 1)
     w = max(r.shape[1] for r in rows); rr = [cv2.copyMakeBorder(r, 0, 0, 0, w-r.shape[1], cv2.BORDER_CONSTANT) for r in ([head]+rows)]
     cv2.imwrite(str(OUTDIR / "step2_diag.png"), np.vstack(rr))
@@ -474,7 +540,8 @@ def _panel(nm, fi_, ek, sup, dist, ha, reason, win):
         pts = c["pts"]
         for px, py in pts.astype(int): cv2.circle(crop, (px, py), 2, (0, 220, 220), -1)
         ctr = fit_centre_fixed(pts, R[ek], np.array(c["seed"], float))
-        cv2.circle(crop, (int(ctr[0]), int(ctr[1])), int(round(R[ek])), (150, 150, 150), 1)   # rejected circle (faint)
+        mj, mn, an, _, _ = make_oval(c["cth"], c["gdir_s"], R[ek])
+        cv2.ellipse(crop, (int(ctr[0]), int(ctr[1])), (int(mj/2), int(mn/2)), an, 0, 360, (150, 150, 150), 1)   # rejected oval (faint)
     crop = fitw(crop)
     bar = np.full((56, crop.shape[1], 3), 25, np.uint8)
     for i, t in enumerate([f"f{fi_} {ek} [{nm}]", f"s={sup:.2f} d={dist:.0f} arc={'Y' if ha else 'N'}", reason or "(gate)"]):
