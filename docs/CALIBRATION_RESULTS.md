@@ -29,12 +29,15 @@ capped to ~15 s. VNG split-screen goggle clips excluded. Reproduce: `python tool
 
 ## Remaining problems (priority order)
 
-1. **Vertical over-calling** — fistula got "UP-beating 0.51" when the real signal is horizontal (left 0.41).
-   The vertical channel fires falsely and can win the zone. TOP fix.
+1. ~~**Vertical over-calling**~~ **FIXED (2026-07-04)** — added a **horizontal-dominance bias** (`pick_axis`:
+   vertical is only called if its confidence beats horizontal by ≥1.5× AND ≥0.50, because horizontal nystagmus
+   is far more common and lid/blink noise mimics vertical). fistula "UP-beating 0.51" → **LEFT-beating 0.41**;
+   clip-1 whole-clip UP → horizontal; no regression on the 3 true negatives or 2 positives.
 2. **Gaze-evoked not detected** — pontine + gaze-evoked-1 have direction-changing nystagmus, but the gaze
-   zones don't split, so "beats toward gaze" can't be shown. Pontine collapsed to no-clear.
+   zones don't split, so "beats toward gaze" can't be shown. Pontine collapsed to no-clear. NOW TOP.
 3. **Some positives missed** — head-impulse clip said nothing (0.12); the head-impulse thrusts likely disrupt
    the trace.
 
-Baseline: **4/8 fully correct incl. 3/3 true negatives; clean confidence separation.** Next: suppress the
-vertical channel, then make gaze-zone splitting work.
+Baseline after vertical fix: **6/8 clean (3 positives + 3/3 true negatives), 2 misses** (pontine gaze-evoked,
+head-impulse). Clean confidence separation (nystagmus 0.41–0.63, normal ≤ 0.26). Next: make gaze-zone
+splitting work (for gaze-evoked).

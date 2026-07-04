@@ -74,6 +74,11 @@ def combined(axis):
     return comb, v, vmask
 
 CONF_MIN = 0.30                                   # below this -> "no clear directional nystagmus"
+VERT_MARGIN = 1.5                                  # vertical must beat horizontal by this factor to be called
+VERT_MIN = 0.50                                    # ...and clear this absolute confidence (vertical is rare;
+#                                                    lid/blink noise mimics it, so demand strong evidence)
+def pick_axis(h, v):
+    return v if (v["conf"] > VERT_MARGIN*max(h["conf"], 1e-6) and v["conf"] >= VERT_MIN) else h
 
 def asymmetry(v):
     """Motion asymmetry of a velocity segment. Returns the FAST-phase sign (+1 = image-right/patient-LEFT for
@@ -149,7 +154,7 @@ def zone_asym(v, idx):
 def zone_report(zname):
     idx = np.where(zone == zname)[0]
     h = zone_asym(vH, idx); v = zone_asym(vV, idx)
-    dom = h if h["conf"] >= v["conf"] else v; ax = "H" if dom is h else "V"
+    dom = pick_axis(h, v); ax = "H" if dom is h else "V"
     return dict(zname=zname, n=len(idx), h=h, v=v, dom=dom, ax=ax,
                 label=(name_axis(dom["fast"], ax) if dom["enough"] and dom["conf"] >= CONF_MIN else
                        ("no clear nystagmus" if dom["enough"] else "not enough data")))
@@ -157,7 +162,7 @@ def zone_report(zname):
 ZONES = ["primary", "left", "right", "extreme-left", "extreme-right"]
 present = [z for z in ZONES if int((zone == z).sum()) > 0]
 ZR = {z: zone_report(z) for z in present}
-H = windowed(vH, "H"); V = windowed(vV, "V"); main = H if H["conf"] >= V["conf"] else V
+H = windowed(vH, "H"); V = windowed(vV, "V"); main = pick_axis(H, V)
 def name(d): return name_axis(d["fast"], d["axis"])
 
 zoning = "sclera-balance (anatomical)" if has_scl else "image-position (fallback; head-motion prone)"
