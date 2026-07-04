@@ -27,23 +27,12 @@ used. Framing locked: **"EllSeg tells us WHERE the iris is; anatomy tells us WHA
 
 ---
 
-## checkpoint/limbus-arc-rescue-gate
-**Step 2a + 2b — Fixed base circle from the sclera-facing limbus, with a safety gate (LOCKED).**
-
-**What was achieved:** a stable iris **circle** built on top of the EllSeg anchor:
-- **Fixed base radius** — the iris size is calibrated once from the medial-lateral limbus width and then held
-  constant; it no longer follows EllSeg's frame-to-frame size shimmer.
-- **True Limbus Evidence + Medial/Lateral Limbus Arc + Partial Arc Completion** — the circle is fitted from
-  ONE clean, contiguous arc where the dark iris meets true white/pink sclera (medial or lateral), rejecting
-  eyelid/lash/skin edges. One clean arc is enough to complete the whole circle.
-- **Side-Gaze Rescue Gate** — a frame is drawn (`fixed_circle_ok`) only if the circle stays near the EllSeg
-  anchor AND overlaps the EllSeg disc AND has a valid medial/lateral arc; otherwise it is withheld
-  (`needs_rescue`) and the last good centre is carried forward. Verified by a full-clip sweep that only
-  genuinely unsafe frames (extreme side gaze, blink, occlusion) are withheld — no good open frame is dropped.
-
-**Deliberately deferred here:** oval foreshortening at side gaze, eyelid/canthus clipping.
-
-**Key file:** `tools/step2_fixed_base_circle.py`.
+## (retired) accurate iris marking — `checkpoint/limbus-arc-rescue-gate`
+**Removed 2026-07-04.** We built a fixed-radius iris circle from the sclera-facing limbus arc with a side-gaze
+rescue gate (`tools/step2_fixed_base_circle.py`), but then **gave up on tracking/marking the iris accurately**
+— the clinical goal only needs a rough eye-position signal (the EllSeg centroid), not a precise iris outline.
+The checkpoint tag was deleted; the code remains in history. We jump straight from the EllSeg anchor to the
+nystagmus-direction pipeline below.
 
 ---
 

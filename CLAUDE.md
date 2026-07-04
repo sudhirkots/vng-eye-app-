@@ -47,13 +47,10 @@ GitHub (durable), + a matching commit message `Lock <rule name>`.
 - Checkpoints locked so far:
   - `checkpoint/ellseg-anchor` — **EllSeg Anchor Locked**: EllSeg locates the iris well enough; do NOT use its
     jagged mask as the final mark (Step 1 = Location of Iris by EllSeg). *(= tag `iris-step1-ellseg-location`.)*
-  - `checkpoint/limbus-arc-rescue-gate` — **Step 2a+2b locked** (`tools/step2_fixed_base_circle.py`): fixed
-    base radius (no size shimmer) + True Limbus Evidence / Medial-Lateral Limbus Arc / Partial Arc Completion
-    (one clean sclera-facing arc places the fixed circle) + Side-Gaze Rescue Gate (a frame is
-    `fixed_circle_ok` only if the circle stays near the EllSeg anchor AND overlaps the EllSeg disc AND has a
-    valid medial/lateral arc; else `needs_rescue`, carry forward last good). Verified by full-clip rescue
-    sweep: rescues are side-gaze/blink/occlusion/drifted-fit, no good open frame withheld. Foreshortening NOT
-    yet added (deferred). (Supersedes the never-tagged intermediate "fixed-base-radius" state.)
+  - *(retired 2026-07-04) `checkpoint/limbus-arc-rescue-gate`* — accurate iris marking (fixed-radius circle
+    from the sclera-facing limbus + rescue gate, `tools/step2_fixed_base_circle.py`). Tag DELETED: we gave up
+    on precise iris tracking/marking — the clinical goal only needs the rough EllSeg centroid. Code stays in
+    history; we go straight from `checkpoint/ellseg-anchor` to the nystagmus-direction checkpoint below.
   - `checkpoint/nystagmus-direction-primary-gaze-zones` — **GOAL REFRAMED to clinical nystagmus-direction
     detection** (not perfect iris geometry). Pipeline: `tools/ellseg_centroid_trace.py` (clean EllSeg centroid
     + per-eye sclera balance) → `tools/nystagmus_direction.py` (windowed slow-phase asymmetry detector +
