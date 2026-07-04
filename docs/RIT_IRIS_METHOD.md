@@ -404,3 +404,117 @@ torsion / texture · exact visible-sector shape. **Just lock the iris as a stabl
 6. **Complete the circle** even if part is hidden or broken by reflection (arc-continuity, Rule #12).
 7. Use the **fitted circle centre** as the refined iris centre.
 8. **Do not let the circle radius change** frame by frame.
+
+---
+
+## STEP 2 = Refinement of the EllSeg anchor. Sub-step **2a — Fixed Base Circle From Sclera-Bounded Iris** (Dr. K, 2026-07-04)
+
+*Step 2 as a whole = refine the locked EllSeg anchor by anatomy. This is its first part, **2a**. Implemented
+FRESH in `tools/step2_fixed_base_circle.py` — it does NOT use the old iris-sclera-almond method.*
+
+**The rule (Dr. K's words):**
+> Look in and around the EllSeg-selected iris region. Find the dark circular iris region whose **left/right
+> margins are bounded by relatively uniform white or pink-white sclera.** Use the **clearest, largest valid
+> full-circle evidence across the clip** to estimate the base iris radius. Once this base radius is chosen,
+> **LOCK it. Do not allow the iris radius to change frame by frame.**
+
+**More precise:**
+> The true iris is the **largest stable dark circle**, with a **sharp limbus margin against sclera on either
+> side.** EllSeg gives the approximate location; the final **base radius** comes from the **best
+> sclera-bounded circular iris evidence**, not from EllSeg's fluctuating mask.
+
+**Future note (do NOT implement yet in 2a):** Side gaze may later make the fixed circle appear as an **oval by
+foreshortening**, but the underlying **anatomical iris size stays fixed** (Rule #18). Foreshortening,
+eyelid clipping, canthus exclusion, sector shape, torsion/texture are all **deferred**.
+
+**Diagnostic output (per `tools/step2_fixed_base_circle.py`):** original frame · EllSeg disc/anchor ·
+detected sclera-facing limbus points · fitted fixed-radius circle · chosen base radius R · circle-centre
+trace (+ a radius-stability plot: per-frame free fit vs the locked flat R).
+
+**PASS/FAIL question:** *Is the fitted circle stable in size and roughly centred on the true iris, without
+shrinking/growing with EllSeg shimmer?*
+
+**Result of the first 2a run (2026-07-04, clip = right vestibular neuritis, 640 frames, both eyes):**
+- **Size stability — PASS.** Locked R = **L 76.5px, R 84.6px**. The free per-frame radius thrashes to ~236px
+  and back (the EllSeg shimmer); the locked flat R ignores it. (`step2_radius_stability.png`.)
+- **Centre trace — smooth & conjugate** (both eyes move together; clear side saccade ~f230, plateau, return).
+  Fixed-R centre fit gives a clean signal despite the garbage free radius. (`step2_centre_trace.png`.)
+- **Centring — good on open/moderate frames; drifts into the sclera at EXTREME side gaze** (f220, f286),
+  because (i) the sclera mask still grabs bright brown skin/lid so the limbus points scatter onto brow/lid,
+  and (ii) no foreshortening yet. Both are deferred to later Step-2 parts. (`step2_diag.png`.)
+- **Verdict:** 2a's core claim holds — fixed R eliminates the size shimmer and yields a smooth conjugate
+  centre trace. Residual side-gaze drift = the next refinement's target.
+
+**What we LOCK here — narrowly (Dr. K, 2026-07-04):** lock **only** *"Fixed base radius works — the iris size
+must NOT follow EllSeg's frame-by-frame shimmer; use a stable base R from good open/frontal frames."*
+Checkpoint = **`checkpoint/fixed-base-radius`**. We do **NOT** yet lock a "sclera-bounded circle"
+(`checkpoint/sclera-bounded-circle` is NOT claimed), because the diagnostic shows the **limbus points are
+still badly polluted by skin/lid/brow edges** — the yellow circle is good on open frames but is pulled by
+false boundary evidence at f220/f286/f335.
+
+### Step 2b (next single rule) — True Limbus Evidence Rule (Dr. K, 2026-07-04)
+> **Fit the fixed-radius circle ONLY from boundary points where dark iris touches TRUE white/pink sclera.**
+> **Ignore red/brown skin, lid crease, eyebrow, lashes, and eyelid edges** even if they create strong contrast.
+
+**Plain instruction:** keep the fixed base radius; now **clean the limbus evidence.** The red limbus points
+should lie **only on the iris↔sclera margin, mainly medial/lateral**, not on skin folds or eyelid/brow edges.
+**Regenerate the same diagnostic** and judge whether the red points **collapse onto the true limbus**. This
+is the correction to do **before** oval foreshortening.
+
+### Partial Arc Completion Rule (CORE rule, Dr. K, 2026-07-04)
+> A full iris circle does **not** need to be visible. If even **one reliable part of the limbus arc** is
+> found, the whole **fixed-radius circle can be reconstructed from it.** The most reliable arc is the
+> **boundary where dark iris meets TRUE white/pink sclera.**
+
+> **One clean limbus arc is stronger than many noisy edges.** Prefer a **short, anatomically correct
+> iris-sclera arc** over a larger collection of edge points from eyelid, skin, lashes, or canthus. Use that
+> clean arc to place the fixed-radius circle and complete the rest.
+
+### Medial/Lateral Limbus Arc Rule (Dr. K, 2026-07-04)
+> After EllSeg gives the iris anchor, **look FIRST on the medial and lateral sides** of the iris for a clean
+> limbus arc: **dark iris on one side, white/pink sclera on the other.** If a valid arc is found on **either**
+> side, use that arc to fit the fixed-radius circle and **complete the whole iris circle.**
+
+**Exclusions:** do NOT use upper/lower eyelid edges as limbus · do NOT use lashes · do NOT use brown skin
+folds · do NOT require a full circle · do NOT let many noisy edges overpower one clean sclera-facing arc.
+
+**Practical:** search for **short curved arc segments near the left or right** side of the EllSeg iris anchor.
+**Score highest** when the arc is **smooth, convex, at the expected fixed radius, and has dark iris inward /
+white-pink sclera outward.** Use the best medial/lateral arc to place the fixed-radius circle.
+
+**One sentence:** *Find one clean iris-sclera arc medially or laterally, lock onto it, and complete the
+fixed-radius circle from that arc.*
+
+**Algorithm consequence (what to change in `tools/step2_fixed_base_circle.py`):** do NOT least-squares-fit a
+big cloud of edge points. Walk the iris-blob contour, keep only vertices that are **medial/lateral AND abut
+TRUE sclera**, group them into **contiguous runs (arcs)**, drop short/scattered runs (skin/lash noise never
+forms a long smooth arc), **score each arc** (length · sclera-contact · convexity · consistency with radius
+R), and complete the fixed-R circle from the **best arc(s)** — one clean arc is enough.
+
+### Side-Gaze Rescue Gate (safety gate, Dr. K, 2026-07-04)
+> Add a conservative **Side-Gaze Rescue Gate** BEFORE drawing the fixed-radius circle. Keep the fixed base
+> radius and the medial/lateral limbus arc rule **unchanged.** If the visible iris evidence is **too
+> narrow/partial**, OR if the fixed circle would sit **mostly outside** the true dark iris / almond evidence,
+> do **NOT** draw a confident full circle: mark the frame **`needs_rescue`** and **carry forward the last
+> reliable centre/radius.** Do NOT implement oval foreshortening yet.
+
+**This is only a safety gate** (matches the project rule: false negatives OK, false positives dangerous — a
+withheld frame is safe, a confidently-wrong circle is not). **Do not change the radius, do not change the
+EllSeg anchor, do not add oval projection.**
+
+**Support must be EllSeg-disc / limbus evidence — NOT generic Otsu dark** (Dr. K, 2026-07-04). Lid shadow and
+skin shadow count as "dark", so a circle drawn **below the eyelid / on skin** can score high against a dark
+mask (this wrongly passed f220). Measure support against the **EllSeg iris disc** and the **true medial/lateral
+sclera-facing limbus**, never against all dark pixels.
+
+**A frame is `fixed_circle_ok` ONLY IF BOTH hold:**
+1. the proposed circle **stays near the EllSeg iris anchor** (centre-to-anchor distance small) **AND overlaps
+   the EllSeg iris disc sufficiently** (`support ≥ SUPPORT_MIN`); **and**
+2. it has a **valid medial/lateral sclera-facing limbus arc** (a real contiguous arc, per the Medial/Lateral
+   Limbus Arc Rule).
+
+**If EITHER fails → `needs_rescue`** (do not draw a confident circle; carry forward the last reliable
+centre/radius). At extreme side gaze the disc is a sliver and the rigid circle drifts off it → both the
+anchor-distance and disc-overlap conditions fail → withheld. Diagnostic is regenerated with a per-frame
+**`fixed_circle_ok` vs `needs_rescue`** label; the centre trace uses the carried-forward centre on rescued
+frames (so no spike).

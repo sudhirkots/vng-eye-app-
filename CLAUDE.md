@@ -47,6 +47,13 @@ GitHub (durable), + a matching commit message `Lock <rule name>`.
 - Checkpoints locked so far:
   - `checkpoint/ellseg-anchor` — **EllSeg Anchor Locked**: EllSeg locates the iris well enough; do NOT use its
     jagged mask as the final mark (Step 1 = Location of Iris by EllSeg). *(= tag `iris-step1-ellseg-location`.)*
+  - `checkpoint/limbus-arc-rescue-gate` — **Step 2a+2b locked** (`tools/step2_fixed_base_circle.py`): fixed
+    base radius (no size shimmer) + True Limbus Evidence / Medial-Lateral Limbus Arc / Partial Arc Completion
+    (one clean sclera-facing arc places the fixed circle) + Side-Gaze Rescue Gate (a frame is
+    `fixed_circle_ok` only if the circle stays near the EllSeg anchor AND overlaps the EllSeg disc AND has a
+    valid medial/lateral arc; else `needs_rescue`, carry forward last good). Verified by full-clip rescue
+    sweep: rescues are side-gaze/blink/occlusion/drifted-fit, no good open frame withheld. Foreshortening NOT
+    yet added (deferred). (Supersedes the never-tagged intermediate "fixed-base-radius" state.)
 - To return to a stage: `git fetch origin --tags` then `git checkout checkpoint/<name>`.
 
 ## Current direction (RIT = Rescue Iris Tracker)
