@@ -1,4 +1,4 @@
-# EyeVNG / RIT — project instructions for Claude Code
+# Clinical Nystagmus Detector (EyeVNG) — project instructions for Claude Code
 
 This file is auto-loaded every session on any machine (it lives in the project, synced via OneDrive + git).
 It exists so work continues seamlessly across the home PC (`C:\Users\sudhi\…`) and the other PC
@@ -15,14 +15,12 @@ ends it with "Let's end", from either machine.
 1. Sync from GitHub: `git fetch origin`; compare local vs `origin/<branch>`. If behind and the working tree
    is **clean**, `git pull` to take the latest committed state. If the tree is dirty or there's a conflict,
    **STOP and report** — never force.
-2. Read/reconcile the saved state:
-   - the **latest `HANDOFF_*.md`** by date (currently `HANDOFF_RIT_NETS_EVAL.md`) + `HANDOFF_RIT_LEARNED_SEGMENTER.md`;
-   - recent sections of **`EYE_VNG_DEVELOPMENT_HISTORY.md`** and the RIT docs
-     (`docs/RIT_STRATEGY_AND_ROADMAP.md`, `docs/CLINICAL_NYSTAGMUS_DETECTOR.md`, `IRIS_IDENTIFICATION_RULES_V2.md`,
-     `ORBIT_AND_IRIS_TRACKING_RULES_V2.md`);
-   - `git log --oneline -10` + `git status --short`;
-   - anything freshly modified under `outputs/**/RIT_ground_truth/` (new clinician marks) and
-     `RIT_learning_workbench/runs/` (new runs).
+2. Read/reconcile the saved state (current first):
+   - **`CHECKPOINTS_BRIEF_DESCRIPTION.md`** (what each locked checkpoint achieved) and
+     **`docs/CLINICAL_NYSTAGMUS_DETECTOR.md`** (the CLINICAL OBJECTIVE + all current rules);
+   - `git log --oneline -10` + `git status --short` + `git tag -l "checkpoint/*"`;
+   - *legacy/history only if needed:* `HANDOFF_*.md`, `EYE_VNG_DEVELOPMENT_HISTORY.md`,
+     `docs/RIT_STRATEGY_AND_ROADMAP.md` (these describe the retired iris-tracking track).
 3. Give a short accurate summary of where things stand, then **wait for the instruction.**
    ("Let's begin" reconstructs the WORK STATE from these files — not this literal chat transcript.)
 
@@ -81,11 +79,15 @@ rough eye-position signal is needed. 30 fps gives direction only (fast phase und
 ## Hard rules (do not break without explicit approval)
 
 - **No commit/push without the user's explicit OK.**
-- No OpenCV iris-rule tuning (that detector is DEPRECATED — its rules are annotation rules now).
-- No nystagmus detection until tracking is reliable; never emit "no nystagmus" from invalid tracking.
-- No wiring any learned model into the clinical RIT path yet.
-- No MediaPipe in the clinical iris path (Stage-0 suggestion only; may be unavailable anyway).
-- Conservative: if uncertain, freeze / mark needs_rescue — false negatives ok, false positives dangerous.
+- Goal = a QUALITATIVE nystagmus reader (present/absent · direction · gaze zone · gaze effect · confidence).
+  NOT precise iris geometry, velocity, rate, or a VNG waveform. Rough EllSeg centroid is enough.
+- **Never claim "no nystagmus" from insufficient/invalid data** — report **unclear / insufficient** instead
+  (false negatives dangerous). If the eye-position signal is unreliable, say so; don't force a call.
+- Conservative on confidence: report clear / probable / unclear honestly; don't overstate.
+- EllSeg is used ONLY as a rough iris *locator* (centroid); do not depend on its mask/shape.
+- Retired (do not resurrect without a reason): precise iris tracking/marking — SAM2, learned segmenter,
+  limbus-arc fixed circle, oval foreshortening. Their code stays in history.
+- Orbit Lock is kept as an optional future input (head-free eye position) — do not delete it.
 
 ## Environment (per machine — the `.venv` shim is unreliable across machines)
 
@@ -98,5 +100,11 @@ rough eye-position signal is needed. 30 fps gives direction only (fast phase und
 
 ## Naming
 
-Use RIT / RIT Orbit Lock / RIT Guardrails / RIT Stage 0 / RIT Rescue. Do NOT call the workflow
-"V1-plus-anatomy", "V2 tracker", or "anatomical engine".
+The project is the **Clinical Nystagmus Detector**. The old "RIT / Rescue Iris Tracker" branding is **legacy**
+(that was the retired precise iris-tracking approach). Existing `rit_*` filenames, `RIT_ground_truth/` folders,
+and handoffs are kept as-is (renaming them would break scripts) but the *goal* is the nystagmus reader, not
+iris tracking.
+
+**Orbit Lock is KEPT** — `tools/orbit_lock*.py`, `src/core/rit_orbit_lock.py`,
+`tools/rit_orbit_lock_marker_v2.html`. It is not part of the current path but may feed a head-free eye
+position in later; do not delete it.
