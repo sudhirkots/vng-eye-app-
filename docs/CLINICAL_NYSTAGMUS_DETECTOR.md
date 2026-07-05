@@ -663,12 +663,38 @@ across all 640 frames (568px L, 575px R). This rigid canthus frame is the head-f
 - **Safety wording:** a negative is reported as **"no jerk nystagmus"**, never "no nystagmus" — so the tool
   does not falsely reassure on a pendular case it is not designed to detect.
 
-**How the app implements this definition:** at 30 fps the individual fast jerks are *undersampled* (they fall
-between frames), so we cannot literally count the ≥3 beats — instead we detect the **equivalent sustained
-signature**: a repeated, same-direction **slow-phase asymmetry** (slow drift consistently one way + brief
-resets the other), measured by the windowed slow-phase asymmetry detector. That asymmetry is the proxy for
-"≥3 consecutive same-direction jerks." At **higher fps (60/120+)** the jerks resolve and the app can count the
-≥3 beats directly (and report beat rate). Either way, the definition above is the target.
+## SCOPE — qualitative detection, NOT quantitative VNG (Dr. K, 2026-07-05)
+
+**The app is NOT intended to perform quantitative VNG fast-phase velocity analysis.** The goal is
+**qualitative clinical detection**, answering:
+- Is a **fast phase visible or inferable**?
+- Is there a **repeated jerk pattern**?
+- Are there **at least 3 successive beats**?
+- Is the **fast-phase direction consistent**?
+
+**On frame rate:** at 30 fps an individual fast phase may occupy only **1–2 frames**, so **velocity and
+waveform analysis are unreliable** — do NOT calculate or claim peak velocity, and do NOT claim formal
+quantitative VNG metrics. **BUT** qualitative detection of a **fast-phase jump + repeated jerk pattern is
+still acceptable** when the tracking signal is clear. **Do NOT over-reject simply because a clip is 30 fps** —
+treat 30 fps as **adequate for qualitative screening when the movement is visible**, and **inadequate only for
+precise fast-phase velocity**.
+
+**Implementation target at 30 fps:**
+1. Detect **sudden position jumps** as candidate fast phases.
+2. Verify **slower drift in the opposite direction** (the slow phase).
+3. Require **≥ 3 repeated beats in the same fast-phase direction**.
+4. Report the **fast-phase direction qualitatively** (left / right / up / down-beating).
+5. Classify into one of four categories:
+   - **`nystagmus_likely`** — ≥3 consistent same-direction jerks with opposite slow drift.
+   - **`no_nystagmus`** — clear tracking, no repeated jerk pattern.
+   - **`uncertain_tracking`** — the eye-position signal is unreliable (can't decide) — do NOT reassure.
+   - **`insufficient_beats`** — a jerk tendency is present but fewer than 3 clean beats (below the definition).
+
+**Current engine (30 fps proxy):** because the individual jerks are undersampled, the shipped detector uses
+the **windowed slow-phase asymmetry** as a proxy for "≥3 consecutive same-direction jerks" (sustained slow
+drift one way + brief resets the other, direction consistent). The jump-based ≥3-beat implementation above is
+the target to move to as tracking/fps improve; at **60/120+ fps** the jerks resolve and the ≥3 beats (and rate)
+can be counted directly. Either way the definition and the four categories are the spec.
 
 ## CLINICAL OBJECTIVE — a qualitative clinical NYSTAGMUS READER (Dr. K, 2026-07-04)
 
