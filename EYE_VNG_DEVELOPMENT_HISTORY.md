@@ -2303,3 +2303,65 @@ Full write-up + reproduction in `HANDOFF_RIT_NETS_EVAL.md`; runners `tools/rit_r
 into clinical RIT.
 
 ---
+
+## 26. The pivot to qualitative nystagmus screening — CURRENT ACTIVE ARCHITECTURE (2026-07-04 / 07-05)
+
+This is the architecture the project now runs on. It supersedes the precise iris-tracking track that
+sections 1–25 describe. The reasoning behind the pivot:
+
+**The goal was reframed.** Precise iris geometry (an accurate iris outline, mask IoU, foreshortened ovals)
+proved both hard and unnecessary. The clinical question a neurologist actually asks at the bedside is
+qualitative: *is there nystagmus, in which gaze position, in which direction, and how confident are we?* So
+the deliverable became a **qualitative clinical nystagmus reader — NOT a quantitative VNG waveform.** No
+velocity, no rate, no degrees; a rough eye-position signal is enough.
+
+**EllSeg centroid is the active eye-position signal.** The pretrained EllSeg net is used purely as an iris
+*locator*: per frame we take its disc **centroid** (smooth, reliable, conjugate) and ignore its jagged
+mask/outline. `tools/ellseg_centroid_trace.py` emits the centroid per eye plus per-eye **sclera balance** and
+disc area to `ellseg_centroid.csv`. This clean centroid trace is the whole eye-position signal.
+
+**The detector reads direction from slow-phase asymmetry, gaze from sclera balance.**
+`tools/nystagmus_direction.py`: it keeps the slow-phase drift (removing only >3 s head/camera drift) and reads
+the fast-phase **direction** from the asymmetry of the velocity (time-asymmetry + speed-asymmetry + skew,
+with cross-window consistency) — it does not need a crisp fast spike, which 30 fps cannot resolve. Gaze zone
+(primary / left / right / extreme) is read from **sclera balance** (head-motion invariant), sustained over
+~2 s and referenced to the habitual median = primary. A horizontal-dominance bias suppresses vertical
+over-calling. One clear iris suffices (nystagmus is conjugate), so single-eye clips are supported.
+
+**Operational definition of nystagmus (the anchor):** a JERK pattern — slow drift one way + brief faster jerk
+the other — repeating **at least 3 times in succession, in the same direction.** Fewer than 3, or inconsistent
+direction → not nystagmus. **Jerk nystagmus only**; pendular is out of scope (its symmetric velocity gives
+~0 asymmetry, so it is intrinsically not called), and a negative is worded "no jerk nystagmus", never "no
+nystagmus". At 30 fps the individual jerks are undersampled, so the slow-phase asymmetry is used as the
+proxy; at 60/120+ fps the ≥3 beats (and rate) can be counted directly.
+
+**Four output categories + a required signal-quality gate.** The detector's headline is one of
+`nystagmus_likely` / `no_nystagmus` / `insufficient_beats` / `uncertain_tracking`, calibrated on 8
+clinician-seeded clips (real nystagmus 0.41–0.63, all 3 normals ≤ 0.26). A **signal-quality layer**
+(per-frame → per-window → overall: good/usable/poor/missing, from seven checks — orbit range, disc area,
+impossible jumps, tracking %, L/R conjugacy, sclera plausibility, blink/occlusion) now runs **first**:
+**`poor_signal`/`missing_signal` must produce `uncertain_tracking`, never `no_nystagmus`.** This converted the
+pontine gaze-evoked clip (low inter-eye conjugacy) from a silent false-negative into an honest "can't tell".
+The report also prints evidence components (asymmetry score, candidate fast-jump count + longest same-direction
+run, direction consistency, usable windows, tracking quality) and a clinical pattern summary (direction-fixed
+/ gaze-evoked direction-changing / vertical / no nystagmus / uncertain_tracking).
+
+**What is deprecated / retired (do not revive without a reason):**
+- **OpenCV iris/sclera/almond rule detection is DEPRECATED** — the fixed-radius circle, limbus-arc RANSAC,
+  dark-within-oval, foreshortening rules (sections 22–24). Code stays in history; not on the active path.
+- **Perfect iris-outline drawing is abandoned** — only a rough centroid is needed.
+- **The learned red/blue (iris/sclera) segmenter is FALLBACK / RESEARCH ONLY** — it may be used *if the EllSeg
+  centroid fails* (which the signal-quality layer flags as `uncertain_tracking`), but it is not the main path
+  and must not be promoted unless EllSeg proves unreliable.
+- **Orbit Lock is KEPT** as an optional future head-free eye-position input (not on the current path).
+
+**Known limit (unchanged):** 30 fps undersamples the fast phase → direction only, no beat rate; gaze-evoked
+direction-changing is not reliably separable at 30 fps (the detector conservatively reports direction-fixed
+rather than over-call). 60/120/240 fps is the recommended capture upgrade.
+
+**Source of truth:** rules and the full objective live in `docs/CLINICAL_NYSTAGMUS_DETECTOR.md`; locked stages
+in `CHECKPOINTS_BRIEF_DESCRIPTION.md`; calibration in `docs/CALIBRATION_RESULTS.md`; the active-architecture
+handoff is `HANDOFF_NYSTAGMUS_DETECTOR.md`. Key code: `tools/ellseg_centroid_trace.py`,
+`tools/nystagmus_direction.py`.
+
+---
