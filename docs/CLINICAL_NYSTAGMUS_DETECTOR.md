@@ -649,6 +649,24 @@ slide independently by construction; any flow that would change the distance is 
 fixed-distance pair, and implausible jumps freeze the frame. Verified: inter-canthus distance spread = **0.0%**
 across all 640 frames (568px L, 575px R). This rigid canthus frame is the head-fixed reference for iris motion.
 
+## DEFINITION OF NYSTAGMUS (operational, Dr. K, 2026-07-05) — the anchor for everything
+
+> **Nystagmus = a JERK pattern — slow drift one way + brief faster jerk the other way — repeating AT LEAST 3
+> TIMES IN SUCCESSION, IN THE SAME DIRECTION** (consistent fast-phase direction).
+
+- **Fewer than 3 beats in succession → NOT nystagmus** (a stray drift or single flick doesn't count).
+- **Inconsistent / changing direction within the run → NOT nystagmus** (irregular movement, saccadic
+  intrusions, voluntary gaze shifts are excluded).
+- Named by the **fast-phase** direction (left-beating = fast phase to the left). Slow phase is the opposite.
+- Scope: **jerk nystagmus only.** (Pendular is out of scope.)
+
+**How the app implements this definition:** at 30 fps the individual fast jerks are *undersampled* (they fall
+between frames), so we cannot literally count the ≥3 beats — instead we detect the **equivalent sustained
+signature**: a repeated, same-direction **slow-phase asymmetry** (slow drift consistently one way + brief
+resets the other), measured by the windowed slow-phase asymmetry detector. That asymmetry is the proxy for
+"≥3 consecutive same-direction jerks." At **higher fps (60/120+)** the jerks resolve and the app can count the
+≥3 beats directly (and report beat rate). Either way, the definition above is the target.
+
 ## CLINICAL OBJECTIVE — a qualitative clinical NYSTAGMUS READER (Dr. K, 2026-07-04)
 
 > The app is **NOT** trying to produce a precise VNG waveform. It is trying to answer the **same first-pass
