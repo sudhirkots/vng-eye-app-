@@ -74,6 +74,11 @@ def combined(axis):
     return comb, v, vmask
 
 CONF_MIN = 0.30                                   # below this -> "no clear directional nystagmus"
+# Top-level category thresholds (from the 8-clip calibration: real nystagmus 0.41-0.63, all 3 normals <=0.26).
+# NYST_CONF sits in the clean gap; TEND_CONF is kept just under it so the 3 known normals stay no_nystagmus.
+NYST_CONF = 0.35                                   # >= this -> nystagmus_likely
+TEND_CONF = 0.30                                   # [TEND_CONF, NYST_CONF) -> insufficient_beats (jerk tendency, <3 clean beats)
+TRACK_MIN = 0.60                                   # valid-tracking fraction below this -> uncertain_tracking (never call "normal")
 VERT_MARGIN = 1.5                                  # vertical must beat horizontal by this factor to be called
 VERT_MIN = 0.50                                    # ...and clear this absolute confidence (vertical is rare;
 #                                                    lid/blink noise mimics it, so demand strong evidence)
@@ -179,3 +184,34 @@ for z in present:
         notes.append(f"(H was {name_axis(r['h']['fast'],'H')} {r['h']['conf']:.2f})")
     print("  %-14s%4.1fs   %-18s%.2f   %s" % (z, r["n"]/FPS, direction, dom["conf"], "; ".join(notes)))
 print(f"  whole-clip reference: {name(main)} (conf {main['conf']:.2f})   [CONF_MIN={CONF_MIN}]")
+
+# ---- TOP-LEVEL CATEGORY: nystagmus_likely / no_nystagmus / insufficient_beats / uncertain_tracking ----
+# Qualitative screening only (see SCOPE in docs/CLINICAL_NYSTAGMUS_DETECTOR.md). No velocity/VNG metrics.
+# Evidence = strongest sustained same-direction slow-phase asymmetry found (whole-clip, or any non-extreme
+# gaze zone). Extreme-gaze zones are excluded from raising the call (tracking/interpretation less reliable).
+valid_any = np.any([valid[ek] for ek in PRESENT], 0) if PRESENT else np.zeros(NF, bool)
+valid_frac = float(valid_any.mean())
+zone_ev = [(ZR[z]["dom"]["conf"], ZR[z]["dom"]["fast"], ZR[z]["ax"], z)
+           for z in present if "extreme" not in z and ZR[z]["dom"]["enough"]]
+ev_conf, ev_fast, ev_ax, ev_zone = max(zone_ev + [(main["conf"], main["fast"], main["axis"], "whole-clip")])
+ev_dir = name_axis(ev_fast, ev_ax)
+zloc = "" if ev_zone in ("primary", "whole-clip") else f" ({ev_zone} gaze)"
+
+if not PRESENT or valid_frac < TRACK_MIN:
+    category = "uncertain_tracking"
+    detail = f"eye-position signal unreliable ({valid_frac:.0%} of frames tracked) - NOT interpretable as normal"
+elif ev_conf >= NYST_CONF:
+    strength = "clear" if ev_conf >= 0.55 else "probable"
+    category = "nystagmus_likely"
+    detail = f"{ev_dir}{zloc} - {strength} (conf {ev_conf:.2f})"
+elif ev_conf >= TEND_CONF:
+    category = "insufficient_beats"
+    detail = f"a {ev_dir}{zloc} jerk tendency, but fewer than 3 clean beats (conf {ev_conf:.2f})"
+else:
+    category = "no_nystagmus"
+    detail = f"clear tracking, no repeated jerk pattern (conf {ev_conf:.2f})"
+
+print(f"\n>>> CATEGORY: {category}")
+print(f"    {detail}")
+if category != "uncertain_tracking":
+    print(f"    [qualitative screening at {FPS:.0f} fps - no velocity / no VNG metrics; jerk nystagmus only]")

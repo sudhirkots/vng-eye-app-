@@ -690,6 +690,23 @@ precise fast-phase velocity**.
    - **`uncertain_tracking`** — the eye-position signal is unreliable (can't decide) — do NOT reassure.
    - **`insufficient_beats`** — a jerk tendency is present but fewer than 3 clean beats (below the definition).
 
+**Implemented (2026-07-05):** the four categories are now the **headline output** of
+`tools/nystagmus_direction.py` (`>>> CATEGORY: ...`), printed under the per-gaze-zone table. Mapping:
+- `uncertain_tracking` — checked **first**: valid-tracking fraction `< TRACK_MIN` (0.60), or no eye present.
+  Never allowed to fall through to `no_nystagmus`.
+- `nystagmus_likely` — strongest sustained same-direction asymmetry (whole-clip or any **non-extreme** gaze
+  zone) `>= NYST_CONF` (0.35); sub-labelled *clear* (≥0.55) or *probable* (0.35–0.55). Extreme-gaze zones do
+  not raise the call (tracking there is less reliable).
+- `insufficient_beats` — evidence in `[TEND_CONF, NYST_CONF)` = `[0.30, 0.35)`: a directional jerk tendency
+  but not enough clean beats.
+- `no_nystagmus` — evidence `< TEND_CONF` (0.30) with adequate tracking.
+
+Thresholds set from the 8-clip calibration (real nystagmus 0.41–0.63, all 3 normals ≤ 0.26): they **reproduce
+the prior verdicts exactly** — 3/3 normals → `no_nystagmus`, the 3 detected positives → `nystagmus_likely`
+(vestibular-rest *clear* 0.63, gaze-evoked-1 *clear* 0.60, fistula *probable* 0.41), and the two fps-limited
+misses (pontine gaze-evoked, head-impulse) → `no_nystagmus`. No regression; the categories only rename and add
+the two safety states.
+
 **Current engine (30 fps proxy):** because the individual jerks are undersampled, the shipped detector uses
 the **windowed slow-phase asymmetry** as a proxy for "≥3 consecutive same-direction jerks" (sustained slow
 drift one way + brief resets the other, direction consistent). The jump-based ≥3-beat implementation above is
