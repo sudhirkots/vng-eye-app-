@@ -692,8 +692,8 @@ precise fast-phase velocity**.
 
 **Implemented (2026-07-05):** the four categories are now the **headline output** of
 `tools/nystagmus_direction.py` (`>>> CATEGORY: ...`), printed under the per-gaze-zone table. Mapping:
-- `uncertain_tracking` — checked **first**: valid-tracking fraction `< TRACK_MIN` (0.60), or no eye present.
-  Never allowed to fall through to `no_nystagmus`.
+- `uncertain_tracking` — checked **first**, gated by the **signal-quality layer** (below): overall
+  `poor_signal`/`missing_signal`, or no eye present. Never allowed to fall through to `no_nystagmus`.
 - `nystagmus_likely` — strongest sustained same-direction asymmetry (whole-clip or any **non-extreme** gaze
   zone) `>= NYST_CONF` (0.35); sub-labelled *clear* (≥0.55) or *probable* (0.35–0.55). Extreme-gaze zones do
   not raise the call (tracking there is less reliable).
@@ -712,6 +712,46 @@ the **windowed slow-phase asymmetry** as a proxy for "≥3 consecutive same-dire
 drift one way + brief resets the other, direction consistent). The jump-based ≥3-beat implementation above is
 the target to move to as tracking/fps improve; at **60/120+ fps** the jerks resolve and the ≥3 beats (and rate)
 can be counted directly. Either way the definition and the four categories are the spec.
+
+### SIGNAL-QUALITY LAYER (added 2026-07-05) — trust the signal before you read it
+
+Before any nystagmus call, `tools/nystagmus_direction.py` classifies signal quality per frame → per window →
+overall as **`good_signal` / `usable_signal` / `poor_signal` / `missing_signal`**, from seven checks:
+1. **centroid inside a plausible orbit range** (within ~6 MAD of the eye's own tracked trajectory),
+2. **plausible disc area** (0.35–2.8× the eye's median),
+3. **no impossible centroid jumps** (> ~1.5 iris diameters in one frame between tracked frames),
+4. **stable tracking %** (per 2 s window; enough usable windows),
+5. **L/R conjugacy** when both eyes are present (horizontal-velocity correlation ≥ 0.20),
+6. **plausible sclera balance** (finite, not pinned to ±1, sclera not collapsed),
+7. **not dominated by blink/occlusion** (disc/sclera collapse or lost track).
+
+Per-frame quality is `good=3 / usable=2 / poor=1 / missing=0` (best available eye drives the frame — one clear
+iris suffices). **Hard rule:** overall `poor_signal` or `missing_signal` → **`uncertain_tracking`**, *never*
+`no_nystagmus`. This is a trust gate only — it measures **no velocity and makes no VNG claim.**
+
+*Effect on the calibration set:* the **pontine gaze-evoked** clip (inter-eye conjugacy 0.12 → `poor_signal`)
+now returns **`uncertain_tracking`** instead of the old silent `no_nystagmus` — converting a dangerous
+false-negative into an honest "can't tell." The 3 normals and 3 detected positives are unchanged (conjugacy
+0.28–0.95 → `good_signal`).
+
+### EVIDENCE COMPONENTS + CLINICAL PATTERN (added 2026-07-05)
+
+Under the category, the report now prints the **evidence components** behind the call (not a VNG readout):
+**slow-phase asymmetry score**, **candidate fast-jump evidence** (count of abrupt *corrective* jumps opposite
+the slow drift + longest same-direction run — a qualitative proxy for "≥3 in succession", **not** a velocity),
+**direction consistency**, **number of usable windows**, and **tracking quality**. It also prints a **clinical
+pattern summary**: `direction-fixed nystagmus` · `gaze-evoked direction-changing nystagmus` (confident and
+*opposite* horizontal calls in left vs right gaze) · `vertical nystagmus` · `no nystagmus` · `uncertain_tracking`.
+Per-gaze-zone rows (primary / left / right / extreme) are shown above; **extreme-gaze zones report separately
+but never drive the headline** (up/down gaze zones are not resolved from horizontal sclera balance).
+
+### FALLBACK POLICY — learned red/blue segmenter (research/fallback only)
+
+EllSeg centroid is the **active clinical path**. The learned red/blue (iris/sclera) segmenter is kept
+**research/fallback only**: it may be used *if the EllSeg centroid fails* (which the signal-quality layer now
+flags as `uncertain_tracking`), but it is **not** the main path and must not be promoted unless EllSeg proves
+unreliable. Retired OpenCV iris/sclera/almond rule detection and perfect-iris-outline drawing are **not** to be
+revived.
 
 ## CLINICAL OBJECTIVE — a qualitative clinical NYSTAGMUS READER (Dr. K, 2026-07-04)
 

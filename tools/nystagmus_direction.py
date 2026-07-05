@@ -185,33 +185,134 @@ for z in present:
     print("  %-14s%4.1fs   %-18s%.2f   %s" % (z, r["n"]/FPS, direction, dom["conf"], "; ".join(notes)))
 print(f"  whole-clip reference: {name(main)} (conf {main['conf']:.2f})   [CONF_MIN={CONF_MIN}]")
 
-# ---- TOP-LEVEL CATEGORY: nystagmus_likely / no_nystagmus / insufficient_beats / uncertain_tracking ----
-# Qualitative screening only (see SCOPE in docs/CLINICAL_NYSTAGMUS_DETECTOR.md). No velocity/VNG metrics.
-# Evidence = strongest sustained same-direction slow-phase asymmetry found (whole-clip, or any non-extreme
-# gaze zone). Extreme-gaze zones are excluded from raising the call (tracking/interpretation less reliable).
-valid_any = np.any([valid[ek] for ek in PRESENT], 0) if PRESENT else np.zeros(NF, bool)
-valid_frac = float(valid_any.mean())
+# ================= SIGNAL-QUALITY LAYER (per-frame -> per-window -> overall) =================
+# Formal check that the EllSeg-centroid signal is TRUSTWORTHY before any nystagmus call. Seven checks:
+#  (1) centroid inside its own plausible orbit range, (2) plausible disc area, (3) no impossible jumps,
+#  (4) stable tracking %, (5) L/R conjugacy (both eyes), (6) plausible sclera balance, (7) not blink/occlusion.
+# Per-frame quality in {good=3, usable=2, poor=1, missing=0}. RULE: overall poor/missing -> uncertain_tracking
+# (NEVER no_nystagmus). This does NOT measure velocity and makes no VNG claim -- it only gates trust.
+QWIN = int(2.0*FPS)                                  # signal-quality analysis window (~2 s)
+
+def eye_frame_quality(ek):
+    cx, cy = pos[ek]; tracked = valid[ek]
+    nL, nR, ar = scl[ek]; tot = np.nan_to_num(nL)+np.nan_to_num(nR)
+    fin = np.isfinite(ar); has_area = fin.any() and np.nanmedian(ar) > 0
+    med_area = np.median(ar[fin]) if fin.any() else np.nan
+    diam = 2*np.sqrt(med_area/np.pi) if has_area else 40.0
+    med_tot = np.median(tot[tot > 0]) if (tot > 0).any() else 1.0
+    # (2) plausible disc area (only where area is reported)
+    area_ok = np.where(fin & has_area, (ar > 0.35*med_area) & (ar < 2.8*med_area), True)
+    # (7) blink / occlusion: area collapse, sclera collapse, or lost track
+    blink = (~tracked) | (fin & has_area & (ar < 0.35*med_area)) | (tot < 0.12*med_tot)
+    # (3) impossible centroid jump (> ~1.5 iris diameters between two tracked frames)
+    d = np.hypot(np.diff(cx, prepend=cx[0]), np.diff(cy, prepend=cy[0]))
+    jump = (d > 1.5*diam) & tracked & np.roll(tracked, 1)
+    # (1) centroid inside a plausible orbit range (robust: within ~6 MAD of its own tracked trajectory)
+    def inrange(a):
+        av = a[tracked]
+        if av.size < 5: return np.ones(NF, bool)
+        c = np.median(av); s = 1.4826*np.median(np.abs(av-c)) + 1e-6
+        return np.abs(a-c) < 6*s
+    orbit_ok = inrange(cx) & inrange(cy)
+    # (6) plausible sclera balance
+    bal = np.where(tot > 0, (np.nan_to_num(nL)-np.nan_to_num(nR))/(tot+1e-9), np.nan)
+    scl_ok = np.where(np.isfinite(bal), (np.abs(bal) < 0.985) & (tot > 0.12*med_tot), True)
+    hard = tracked & (blink | jump | (~area_ok) | (~orbit_ok) | (~scl_ok))    # tracked but a hard failure
+    good = tracked & area_ok & (~blink) & (~jump) & orbit_ok & scl_ok
+    q = np.zeros(NF, int)
+    q[tracked & ~hard] = 2                            # usable (tracked + plausible)
+    q[good] = 3                                       # good
+    q[hard] = 1                                       # poor
+    return q                                          # 0 (missing) where not tracked
+
+def signal_quality():
+    FQ = np.stack([eye_frame_quality(ek) for ek in PRESENT]).max(0) if PRESENT else np.zeros(NF, int)
+    conj = None                                       # (5) conjugacy needs both eyes
+    if len(PRESENT) == 2:
+        vL = np.gradient(gsmooth(pos["L"][0], 1.5)); vR = np.gradient(gsmooth(pos["R"][0], 1.5))
+        m = valid["L"] & valid["R"]
+        if m.sum() > 10 and vL[m].std() > 1e-6 and vR[m].std() > 1e-6:
+            conj = float(np.corrcoef(vL[m], vR[m])[0, 1])
+    wl = []                                           # (4) per-window tracking stability
+    for a in range(0, NF, QWIN):
+        seg = FQ[a:a+QWIN]
+        if seg.size == 0: continue
+        pf, uf, gf = (seg >= 1).mean(), (seg >= 2).mean(), (seg == 3).mean()
+        wl.append("missing" if pf < 0.5 else "poor" if uf < 0.5 else "usable" if gf < 0.5 else "good")
+    n_usable = sum(w in ("good", "usable") for w in wl)
+    vfrac, ufrac, gfrac = float((FQ >= 1).mean()), float((FQ >= 2).mean()), float((FQ == 3).mean())
+    conj_bad = conj is not None and conj < 0.20
+    if not PRESENT or vfrac < 0.50:                       overall = "missing_signal"
+    elif ufrac < 0.50 or n_usable < 2 or conj_bad:       overall = "poor_signal"
+    elif gfrac < 0.50:                                   overall = "usable_signal"
+    else:                                                overall = "good_signal"
+    return dict(FQ=FQ, overall=overall, valid_frac=vfrac, usable_frac=ufrac, good_frac=gfrac,
+                n_usable=n_usable, n_windows=len(wl), conj=conj, conj_bad=conj_bad)
+
+def fast_jump_evidence():
+    """Qualitative candidate fast phases: abrupt CORRECTIVE velocity spikes opposite the local slow-phase drift.
+    NOT a velocity measurement -- it only counts visible corrective jumps + their dominant direction and the
+    longest same-direction run (a direct proxy for the '>=3 beats in succession' definition)."""
+    v = vH; slow = gsmooth(v, 0.8*FPS); resid = v - slow
+    mad = 1.4826*np.median(np.abs(resid - np.median(resid))) + 1e-6
+    jumps = []
+    for i in np.where(np.abs(resid) > 4.0*mad)[0]:
+        if slow[i] != 0 and np.sign(resid[i]) == -np.sign(slow[i]):       # opposite slow drift = corrective
+            if not jumps or i - jumps[-1][0] >= REFR: jumps.append((int(i), int(np.sign(resid[i]))))
+    if not jumps: return dict(n=0, dir=0, run=0)
+    signs = [s for _, s in jumps]; run = best = 1
+    for k in range(1, len(signs)):
+        run = run+1 if signs[k] == signs[k-1] else 1; best = max(best, run)
+    return dict(n=len(jumps), dir=int(np.sign(sum(signs))) or 1, run=best)
+
+SQ = signal_quality(); FJ = fast_jump_evidence()
+
+# ---- TOP-LEVEL CATEGORY (gated by signal quality FIRST) ----
+# Evidence for a call = strongest sustained same-direction slow-phase asymmetry (whole-clip or any NON-extreme
+# gaze zone). Extreme-gaze zones report separately but never drive the headline (tracking there less reliable).
 zone_ev = [(ZR[z]["dom"]["conf"], ZR[z]["dom"]["fast"], ZR[z]["ax"], z)
            for z in present if "extreme" not in z and ZR[z]["dom"]["enough"]]
 ev_conf, ev_fast, ev_ax, ev_zone = max(zone_ev + [(main["conf"], main["fast"], main["axis"], "whole-clip")])
 ev_dir = name_axis(ev_fast, ev_ax)
 zloc = "" if ev_zone in ("primary", "whole-clip") else f" ({ev_zone} gaze)"
 
-if not PRESENT or valid_frac < TRACK_MIN:
+if SQ["overall"] in ("poor_signal", "missing_signal") or not PRESENT:
     category = "uncertain_tracking"
-    detail = f"eye-position signal unreliable ({valid_frac:.0%} of frames tracked) - NOT interpretable as normal"
+    detail = f"{SQ['overall']} - eye-position signal not trustworthy; NOT interpretable as normal"
 elif ev_conf >= NYST_CONF:
     strength = "clear" if ev_conf >= 0.55 else "probable"
-    category = "nystagmus_likely"
-    detail = f"{ev_dir}{zloc} - {strength} (conf {ev_conf:.2f})"
+    category = "nystagmus_likely"; detail = f"{ev_dir}{zloc} - {strength} (conf {ev_conf:.2f})"
 elif ev_conf >= TEND_CONF:
-    category = "insufficient_beats"
-    detail = f"a {ev_dir}{zloc} jerk tendency, but fewer than 3 clean beats (conf {ev_conf:.2f})"
+    category = "insufficient_beats"; detail = f"a {ev_dir}{zloc} jerk tendency, but <3 clean beats (conf {ev_conf:.2f})"
 else:
-    category = "no_nystagmus"
-    detail = f"clear tracking, no repeated jerk pattern (conf {ev_conf:.2f})"
+    category = "no_nystagmus"; detail = f"clear tracking, no repeated jerk pattern (conf {ev_conf:.2f})"
+
+# ---- CLINICAL PATTERN SUMMARY ----
+def zone_call(z):                                    # confident signed direction in a zone, else None
+    r = ZR.get(z)
+    return (r["ax"], r["dom"]["fast"]) if (r and r["dom"]["enough"] and r["dom"]["conf"] >= NYST_CONF) else None
+if category == "uncertain_tracking":                 pattern = "uncertain_tracking"
+elif category == "no_nystagmus":                     pattern = "no nystagmus"
+elif category == "insufficient_beats":               pattern = "no definite nystagmus (sub-threshold tendency)"
+elif ev_ax == "V":                                   pattern = "vertical nystagmus"
+else:
+    lz, rz = zone_call("left"), zone_call("right")   # gaze-evoked = direction CHANGES between L and R gaze
+    if lz and rz and lz[0] == "H" and rz[0] == "H" and lz[1] != rz[1]:
+        pattern = "gaze-evoked direction-changing nystagmus"
+    else:
+        pattern = "direction-fixed nystagmus"
 
 print(f"\n>>> CATEGORY: {category}")
 print(f"    {detail}")
+print(f"    clinical pattern: {pattern}")
+print("  evidence components:")
+mA = main["A"] or {}
+print(f"    - slow-phase asymmetry score : {ev_conf:.2f}  (agree {mA.get('agree',0):.2f}, strength {mA.get('strength',0):.2f})")
+fjdir = name_axis(FJ["dir"], "H") if FJ["n"] else "n/a"
+print(f"    - candidate fast-jumps        : {FJ['n']} corrective (longest same-dir run {FJ['run']}, {fjdir})")
+print(f"    - direction consistency       : {main['cons']:.2f}")
+print(f"    - usable windows              : {SQ['n_usable']}/{SQ['n_windows']}")
+conjs = f", conjugacy {SQ['conj']:.2f}" if SQ["conj"] is not None else ", single-eye"
+print(f"    - tracking quality            : {SQ['overall']} (tracked {SQ['valid_frac']:.0%}, good {SQ['good_frac']:.0%}{conjs})")
 if category != "uncertain_tracking":
     print(f"    [qualitative screening at {FPS:.0f} fps - no velocity / no VNG metrics; jerk nystagmus only]")

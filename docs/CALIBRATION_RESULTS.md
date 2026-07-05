@@ -48,3 +48,16 @@ capped to ~15 s. VNG split-screen goggle clips excluded. Reproduce: `python tool
 Baseline after vertical fix: **6/8 clean (3 positives + 3/3 true negatives), 2 misses** (pontine gaze-evoked,
 head-impulse). Clean confidence separation (nystagmus 0.41–0.63, normal ≤ 0.26). Next: make gaze-zone
 splitting work (for gaze-evoked).
+
+## Update 2026-07-05 — four named categories + signal-quality gate
+
+The output is now the four named categories with a **signal-quality gate** (see
+`docs/CLINICAL_NYSTAGMUS_DETECTOR.md`). Re-run of the 8 clips:
+- 3 normals → **`no_nystagmus`** (unchanged true negatives); 3 detected positives → **`nystagmus_likely`**
+  (vestibular *clear* 0.63, gaze-evoked-1 *clear* 0.60, fistula *probable* 0.41) — unchanged.
+- **pontine gaze-evoked** (inter-eye conjugacy 0.12 → `poor_signal`) → **`uncertain_tracking`**, replacing the
+  old silent `no_nystagmus`. This **converts a false-negative into an honest "can't tell"** — a safety
+  improvement, since the pontine clip genuinely has nystagmus.
+- head-impulse remains a **`no_nystagmus`** miss (conjugacy 0.28 passes; asymmetry genuinely weak at 0.12).
+
+Net: no regression on the 6 clean calls; one former miss (pontine) is now correctly flagged uncertain.
