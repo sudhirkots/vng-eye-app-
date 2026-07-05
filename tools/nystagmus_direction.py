@@ -157,7 +157,7 @@ def zone_report(zname):
     dom = pick_axis(h, v); ax = "H" if dom is h else "V"
     return dict(zname=zname, n=len(idx), h=h, v=v, dom=dom, ax=ax,
                 label=(name_axis(dom["fast"], ax) if dom["enough"] and dom["conf"] >= CONF_MIN else
-                       ("no clear nystagmus" if dom["enough"] else "not enough data")))
+                       ("no jerk nystagmus" if dom["enough"] else "not enough data")))
 
 ZONES = ["primary", "left", "right", "extreme-left", "extreme-right"]
 present = [z for z in ZONES if int((zone == z).sum()) > 0]
@@ -171,7 +171,7 @@ print(f"  {'zone':14}{'time':8}{'direction':18}{'conf':7}{'notes'}")
 for z in present:
     r = ZR[z]; dom = r["dom"]
     direction = name_axis(dom["fast"], r["ax"]) if (dom["enough"] and dom["conf"] >= CONF_MIN) else \
-                ("no clear nystagmus" if dom["enough"] else "not enough data")
+                ("no jerk nystagmus" if dom["enough"] else "not enough data")
     notes = []
     if "extreme" in z: notes.append("tracking/interpretation less reliable")
     if dom["enough"] and 0 < dom["conf"] < CONF_MIN: notes.append("below confidence threshold")

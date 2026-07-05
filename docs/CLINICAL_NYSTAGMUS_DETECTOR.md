@@ -658,7 +658,10 @@ across all 640 frames (568px L, 575px R). This rigid canthus frame is the head-f
 - **Inconsistent / changing direction within the run → NOT nystagmus** (irregular movement, saccadic
   intrusions, voluntary gaze shifts are excluded).
 - Named by the **fast-phase** direction (left-beating = fast phase to the left). Slow phase is the opposite.
-- Scope: **jerk nystagmus only.** (Pendular is out of scope.)
+- Scope: **jerk nystagmus only.** (Pendular is out of scope — it is intrinsically excluded: pendular has
+  *symmetric* velocity, so the slow-phase-asymmetry engine measures ~0 and won't call it.)
+- **Safety wording:** a negative is reported as **"no jerk nystagmus"**, never "no nystagmus" — so the tool
+  does not falsely reassure on a pendular case it is not designed to detect.
 
 **How the app implements this definition:** at 30 fps the individual fast jerks are *undersampled* (they fall
 between frames), so we cannot literally count the ≥3 beats — instead we detect the **equivalent sustained
