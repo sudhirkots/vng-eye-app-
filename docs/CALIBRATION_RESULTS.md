@@ -33,8 +33,15 @@ capped to ~15 s. VNG split-screen goggle clips excluded. Reproduce: `python tool
    vertical is only called if its confidence beats horizontal by ≥1.5× AND ≥0.50, because horizontal nystagmus
    is far more common and lid/blink noise mimics vertical). fistula "UP-beating 0.51" → **LEFT-beating 0.41**;
    clip-1 whole-clip UP → horizontal; no regression on the 3 true negatives or 2 positives.
-2. **Gaze-evoked not detected** — pontine + gaze-evoked-1 have direction-changing nystagmus, but the gaze
-   zones don't split, so "beats toward gaze" can't be shown. Pontine collapsed to no-clear. NOW TOP.
+2. **Gaze-evoked not safely detectable at 25 fps (ATTEMPTED + REVERTED, 2026-07-05).** Tried softened graded
+   gaze zones + a per-zone gaze-evoked prior at low confidence (test left-beating in left gaze, right-beating
+   in right gaze). Result on the full set: it **false-positived on normal clip 3** ("GAZE-EVOKED") and **lost
+   fistula's correct call**, while STILL not fixing pontine (left gaze read right-beating). **Root cause:** at
+   25 fps with short gaze segments the per-zone beat signal is too weak to distinguish real gaze-evoked from a
+   normal eye's small wander + noise — so any low-confidence prior flags normals. **The normal controls caught
+   it.** Reverted to this baseline. *Gaze-evoked reliable detection needs higher fps (60/120); it cannot be
+   squeezed out of 25 fps IR without endangering the negatives.* The gaze DETECTION itself works (pontine:
+   early=left gaze, later=right gaze); only the per-zone beat direction is unreliable at this sampling.
 3. **Some positives missed** — head-impulse clip said nothing (0.12); the head-impulse thrusts likely disrupt
    the trace.
 
