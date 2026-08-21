@@ -205,8 +205,8 @@ const CANALS = {
         pair:{ipsi:'SO', contra:'IR'}, fast:{v:'up', t:'right'} },
 };
 const ANTAGONIST = { MR:'LR', LR:'MR', SR:'IR', IR:'SR', SO:'IO', IO:'SO' };
-const MUSCLE_NAMES = { MR:'Medial rectus', LR:'Lateral rectus', SR:'Superior rectus',
-                       IR:'Inferior rectus', SO:'Superior oblique', IO:'Inferior oblique' };
+const MUSCLE_NAMES = { MR:'Medial rectus (CN III)', LR:'Lateral rectus (CN VI)', SR:'Superior rectus (CN III)',
+                       IR:'Inferior rectus (CN III)', SO:'Superior oblique (CN IV)', IO:'Inferior oblique (CN III)' };
 
 /* Clinical correlate shown in teaching mode, keyed canalId + '|' + excited(bool) */
 const CLIN_NOTES = {
@@ -831,7 +831,8 @@ function buildMatrix(){
            `<td>${fast}</td></tr>`;
   }).join('');
   $('#matrixTable').innerHTML =
-    '<tr><th>Canal</th><th>Excitatory flow</th><th>Muscles excited</th><th>Muscles inhibited</th><th>Fast phase (nystagmus)</th></tr>' + rows;
+    '<tr><th>Canal</th><th>Excitatory flow</th><th>Muscles excited</th><th>Muscles inhibited</th><th>Fast phase (nystagmus)</th></tr>' + rows +
+    '<tr><td colspan="5" style="color:var(--ink-soft)">Innervation — <b>LR₆SO₄R₃</b>: lateral rectus CN VI, superior oblique CN IV, all the rest CN III.</td></tr>';
 }
 
 /* ---------------------------------------------------------------------
