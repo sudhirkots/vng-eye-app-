@@ -59,9 +59,16 @@
   .canalLabel{font-size:13px;font-weight:700;fill:var(--ink-soft);cursor:pointer}
   .canalLabel.sel{fill:var(--coral)}
 
-  .muscle{stroke:#9aa3ae;stroke-width:1.2;fill:var(--neutral-muscle);transition:fill .25s}
-  .muscle.excited{fill:var(--coral);stroke:#b53c25;animation:pulse 1.1s ease-in-out infinite}
-  .muscle.inhibited{fill:var(--blue-inhib);opacity:.55}
+  /* each muscle is a <g class="musGrp"> containing filled parts (.mFill: belly,
+     insertion pad) and stroked parts (.mStroke: oblique tendon bands) */
+  .musGrp .mFill{fill:var(--neutral-muscle);stroke:#9aa3ae;stroke-width:1.2;transition:fill .25s}
+  .musGrp .mStroke{fill:none;stroke:var(--neutral-muscle);stroke-width:6;stroke-linecap:round;transition:stroke .25s}
+  .musGrp.excited .mFill{fill:var(--coral);stroke:#b53c25}
+  .musGrp.excited .mStroke{stroke:var(--coral)}
+  .musGrp.excited{animation:pulse 1.1s ease-in-out infinite}
+  .musGrp.inhibited .mFill{fill:var(--blue-inhib)}
+  .musGrp.inhibited .mStroke{stroke:var(--blue-inhib)}
+  .musGrp.inhibited{opacity:.6}
   @keyframes pulse{0%,100%{filter:none}50%{filter:drop-shadow(0 0 6px rgba(226,84,58,.85))}}
   .mLabel{font-size:12px;font-weight:700;fill:var(--ink-soft)}
   .mLabel.excited{fill:var(--coral)}
@@ -340,32 +347,71 @@ function muscleAngle(eye, m){
 function buildMuscles(){
   // nose bridge glyph between the eyes
   el('path', {d:'M 312 110 Q 320 160 308 205 M 328 110 Q 320 160 332 205', fill:'none', stroke:'#d8cfc2', 'stroke-width':3, 'stroke-linecap':'round'}, musclesSvg);
+  const q = d => d*Math.PI/180;
+  function addLabel(E, m, lx, ly){
+    const t = el('text', {x:lx, y:ly, 'text-anchor':'middle', class:'mLabel', id:`mlbl${E.eye}${m}`}, musclesSvg);
+    t.textContent = m;
+    const tip = el('title', {}, t); tip.textContent = MUSCLE_NAMES[m];
+  }
   for(const eye of ['R','L']){
-    const E = EYES_M[eye];
-    el('circle', {cx:E.cx, cy:E.cy, r:52, fill:'#fdfdfd', stroke:'#aab4c0', 'stroke-width':2}, musclesSvg);
-    el('circle', {cx:E.cx, cy:E.cy, r:20, fill:'#7a5230'}, musclesSvg);       // iris
-    el('circle', {cx:E.cx, cy:E.cy, r:9,  fill:'#1b1b1b'}, musclesSvg);       // pupil
-    const cap = el('text', {x:E.cx, y:E.cy+134, 'text-anchor':'middle', 'font-size':13, 'font-weight':600, fill:'#5a6b7d'}, musclesSvg);
+    const E = EYES_M[eye]; E.eye = eye;
+    const n = E.nasal, cx = E.cx, cy = E.cy;
+    el('circle', {cx, cy, r:52, fill:'#fdfdfd', stroke:'#aab4c0', 'stroke-width':2}, musclesSvg);
+    el('circle', {cx, cy, r:20, fill:'#7a5230'}, musclesSvg);       // iris
+    el('circle', {cx, cy, r:9,  fill:'#1b1b1b'}, musclesSvg);       // pupil
+    const cap = el('text', {x:cx, y:cy+134, 'text-anchor':'middle', 'font-size':13, 'font-weight':600, fill:'#5a6b7d'}, musclesSvg);
     cap.textContent = eye==='R' ? "Patient's RIGHT eye" : "Patient's LEFT eye";
-    for(const m of ['MR','LR','SR','IR','SO','IO']){
-      const a = muscleAngle(eye, m) * Math.PI/180;
-      const isObl = (m==='SO'||m==='IO');
-      const rMid = 79;
-      const mx = E.cx + rMid*Math.cos(a), my = E.cy + rMid*Math.sin(a);
-      // spindle: ellipse with long axis pointing radially (toward the globe)
-      el('ellipse', {cx:mx, cy:my, rx: isObl?22:25, ry: isObl?6.5:8.5,
-                     transform:`rotate(${muscleAngle(eye,m)} ${mx} ${my})`,
-                     class:'muscle', id:`mus${eye}${m}`}, musclesSvg);
-      // tendon line to globe
-      const tx = E.cx + 53*Math.cos(a), ty = E.cy + 53*Math.sin(a);
-      const t2x = E.cx + (rMid-(isObl?20:23))*Math.cos(a), t2y = E.cy + (rMid-(isObl?20:23))*Math.sin(a);
-      el('line', {x1:tx, y1:ty, x2:t2x, y2:t2y, stroke:'#9aa3ae', 'stroke-width':2}, musclesSvg);
-      // label
-      const rl = 112;
-      const lx = E.cx + rl*Math.cos(a), ly = E.cy + rl*Math.sin(a) + 4;
-      const t = el('text', {x:lx, y:ly, 'text-anchor':'middle', class:'mLabel', id:`mlbl${eye}${m}`}, musclesSvg);
-      t.textContent = m;
-      const tip = el('title', {}, t); tip.textContent = MUSCLE_NAMES[m];
+
+    /* Four recti: belly spindle whose tip reaches the globe, plus a tangential
+       insertion pad ON the globe edge (recti insert anterior to the equator). */
+    for(const m of ['MR','LR','SR','IR']){
+      const ang = muscleAngle(eye, m), a = q(ang);
+      const g = el('g', {class:'musGrp', id:`mus${eye}${m}`}, musclesSvg);
+      const tip = el('title', {}, g); tip.textContent = MUSCLE_NAMES[m];
+      const bx = cx + 82*Math.cos(a), by = cy + 82*Math.sin(a);
+      el('ellipse', {cx:bx, cy:by, rx:28, ry:9, class:'mFill',
+                     transform:`rotate(${ang} ${bx} ${by})`}, g);
+      const px = cx + 49*Math.cos(a), py = cy + 49*Math.sin(a);
+      el('rect', {x:px-10, y:py-3, width:20, height:6, rx:3, class:'mFill',
+                  transform:`rotate(${ang+90} ${px} ${py})`}, g);   // insertion on the globe
+      addLabel(E, m, cx + 118*Math.cos(a), cy + 118*Math.sin(a) + 4);
+    }
+
+    /* SO: belly → trochlea (superonasal) → tendon reflected over the globe →
+       inserts on the SUPEROTEMPORAL quadrant (dashed where it passes behind). */
+    {
+      const g = el('g', {class:'musGrp', id:`mus${eye}SO`}, musclesSvg);
+      const tip = el('title', {}, g); tip.textContent = MUSCLE_NAMES.SO + ' (via trochlea; inserts superotemporally, behind the equator)';
+      const T = [cx + n*40, cy - 52];                                // trochlea
+      el('path', {d:`M ${cx+n*98} ${cy-44} Q ${cx+n*66} ${cy-54} ${T[0]} ${T[1]}`, class:'mStroke'}, g); // belly
+      el('circle', {cx:T[0], cy:T[1], r:5, fill:'none', stroke:'#8a94a0', 'stroke-width':2.2}, g);       // trochlea ring
+      const Ept = [cx - n*8, cy - 55];
+      el('path', {d:`M ${T[0]} ${T[1]} Q ${cx+n*14} ${cy-66} ${Ept[0]} ${Ept[1]}`, class:'mStroke'}, g); // visible tendon
+      const aIns = -90 - n*45;                                       // superotemporal
+      const P = [cx + 34*Math.cos(q(aIns)), cy + 34*Math.sin(q(aIns))];
+      el('path', {d:`M ${Ept[0]} ${Ept[1]} Q ${cx-n*24} ${cy-44} ${P[0]} ${P[1]}`, class:'mStroke',
+                  'stroke-dasharray':'4 5', style:'stroke-width:4'}, g);                                 // behind the globe
+      el('rect', {x:P[0]-8, y:P[1]-2.5, width:16, height:5, rx:2.5, class:'mFill',
+                  transform:`rotate(${aIns+90} ${P[0]} ${P[1]})`}, g);                                   // insertion
+      addLabel(E, 'SO', cx + n*84, cy - 72);
+    }
+
+    /* IO: origin at the inferonasal orbital rim → passes under the globe →
+       inserts on the INFEROTEMPORAL quadrant (dashed where behind). */
+    {
+      const g = el('g', {class:'musGrp', id:`mus${eye}IO`}, musclesSvg);
+      const tip = el('title', {}, g); tip.textContent = MUSCLE_NAMES.IO + ' (inserts inferotemporally, behind the equator)';
+      const O = [cx + n*46, cy + 46];                                // inferonasal origin
+      el('circle', {cx:O[0], cy:O[1], r:3.5, fill:'#8a94a0'}, g);
+      const E2 = [cx - n*8, cy + 55];
+      el('path', {d:`M ${O[0]} ${O[1]} Q ${cx+n*10} ${cy+66} ${E2[0]} ${E2[1]}`, class:'mStroke'}, g);   // visible belly
+      const a2 = 90 + n*45;                                          // inferotemporal
+      const P2 = [cx + 34*Math.cos(q(a2)), cy + 34*Math.sin(q(a2))];
+      el('path', {d:`M ${E2[0]} ${E2[1]} Q ${cx-n*24} ${cy+44} ${P2[0]} ${P2[1]}`, class:'mStroke',
+                  'stroke-dasharray':'4 5', style:'stroke-width:4'}, g);                                 // behind the globe
+      el('rect', {x:P2[0]-8, y:P2[1]-2.5, width:16, height:5, rx:2.5, class:'mFill',
+                  transform:`rotate(${a2+90} ${P2[0]} ${P2[1]})`}, g);                                   // insertion
+      addLabel(E, 'IO', cx + n*84, cy + 80);
     }
   }
   const hdr = el('text', {x:320, y:20, 'text-anchor':'middle', 'font-size':12, fill:'#98a4b1'}, musclesSvg);
@@ -621,7 +667,7 @@ function render(){
   $('#modePatient').classList.toggle('on', !teach);
   $('#matrixBox').classList.toggle('patientHidden', !teach);
   $('#musclesSub').textContent = teach
-    ? 'Excited muscles glow coral; their antagonists (inhibited) turn blue. Hover a label for the full name.'
+    ? 'Excited muscles glow coral; their antagonists (inhibited) turn blue. The obliques run from the nasal side to insert on the temporal quadrants behind the equator (dashed = behind the globe); SO is reflected through the trochlea (small ring).'
     : 'The glowing muscles are the ones pulling the eyes; the blue ones are relaxing.';
   document.querySelectorAll('.mLabel').forEach(t=>t.style.display = teach ? '' : 'none');
 }
