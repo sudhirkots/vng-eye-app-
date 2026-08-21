@@ -60,6 +60,9 @@
   .canalLabel.sel{fill:var(--coral)}
 
   .flowRow.dim button{opacity:.5}
+  .flowRow.off{opacity:.5;pointer-events:none}
+  #multiHint{display:none;margin-top:8px;font-size:.8rem;color:var(--navy-soft);background:#eef3f9;
+    border-radius:8px;padding:7px 11px}
   /* H-pattern (anatomical actions vs clinical testing) arrows */
   .hpArrow line{stroke:#8a94a0;stroke-width:2.2}
   .hpArrow polygon{fill:#8a94a0}
@@ -162,6 +165,7 @@
     <div class="zoomOverlay" title="Click to enlarge"><span class="zi">⤢</span></div>
     <h2>Semicircular canals <span class="compactHide" style="font-weight:400;color:var(--ink-soft);font-size:.8rem">— head viewed from above (schematic, not to scale)</span></h2>
     <p class="sub compactHide">Click a canal (or use the buttons), then choose the endolymph flow direction.
+       Click MORE canals to combine them — e.g. both PCs → pure upbeat; AC+PC of one ear → pure torsion.
        AC/PC pairs lie in the LARP / RALP planes (~45° to the sagittal plane).</p>
     <svg id="headSvg" viewBox="0 0 520 440" aria-label="Semicircular canal schematic"></svg>
     <div class="canalBtns compactHide" id="canalBtns"></div>
@@ -169,6 +173,8 @@
       <button data-flow="petal">Ampullopetal <span style="color:var(--ink-soft)">(toward ampulla)</span><span class="tag" id="tagPetal"></span></button>
       <button data-flow="fugal">Ampullofugal <span style="color:var(--ink-soft)">(away from ampulla)</span><span class="tag" id="tagFugal"></span></button>
     </div>
+    <div id="multiHint" class="compactHide"><b>Multi-canal mode:</b> every selected canal is stimulated
+      (its own excitatory flow) and the responses add as vectors. Click a highlighted canal to remove it.</div>
   </section>
 
   <!-- ==================== MUSCLE PANEL ==================== -->
@@ -303,10 +309,44 @@ const INHIB_NOTE = "Inhibitory responses are <b>weaker</b> than excitatory ones 
 /* ---------------------------------------------------------------------
    App state
 --------------------------------------------------------------------- */
-/* selMuscle: null = canal mode; {eye:'L'|'R', m:'SO'} = single-muscle explore mode */
-const state = { canal:'LP', flow:'fugal', mode:'teaching', paused:false, slowmo:false, selMuscle:null };
+/* selMuscle: null = canal mode; {eye:'L'|'R', m:'SO'} = single-muscle explore mode.
+   canals: the selected canal SET. One canal → classic mode with the petal/fugal
+   switch. Two or more → combined stimulation: each selected canal is driven
+   with its own excitatory flow and the responses sum (vector addition). */
+const state = { canals:['LP'], flow:'fugal', mode:'teaching', paused:false, slowmo:false, selMuscle:null };
 function selectMuscle(eye, m){ state.selMuscle = {eye, m}; render(); }
-function selectCanal(id){ state.selMuscle = null; if(id) state.canal = id; render(); }
+function selectCanal(id){
+  const wasMuscle = !!state.selMuscle;
+  state.selMuscle = null;
+  if(id){
+    if(wasMuscle){
+      state.canals = [id];
+    } else {
+      const i = state.canals.indexOf(id);
+      if(i >= 0){
+        if(state.canals.length > 1){
+          state.canals.splice(i, 1);
+          if(state.canals.length === 1)      // back to single-canal mode:
+            state.flow = CANALS[state.canals[0]].excitatoryFlow;
+        }                                     // clicking the only canal: keep it
+      } else {
+        state.canals.push(id);
+      }
+    }
+  }
+  render();
+}
+
+/* Clinical notes for notable two-canal combinations (keys sorted) */
+const COMBO_NOTES = {
+  'LP|RP': 'Both posterior canals: the torsional components cancel → pure <b>UPBEAT</b> nystagmus — the pattern of bilateral PC-BPPV. Pure upbeat (or downbeat) nystagmus should also always raise the question of a central cause.',
+  'LA|RA': 'Both anterior canals: torsions cancel → pure <b>DOWNBEAT</b> nystagmus — think central before invoking rare bilateral AC-BPPV.',
+  'LA|LP': 'Left AC + left PC are the two vertical canals of one ear: their vertical pulls cancel → pure <b>TORSIONAL</b> nystagmus toward the left ear.',
+  'RA|RP': 'Right AC + right PC: vertical pulls cancel → pure <b>TORSIONAL</b> nystagmus toward the right ear.',
+  'LH|LP': 'Left PC + left HC: upbeat–torsional PLUS left-beating — the typical <b>multicanal (PC+HC) BPPV</b> pattern of the left ear.',
+  'RH|RP': 'Right PC + right HC: upbeat–torsional PLUS right-beating — the typical <b>multicanal (PC+HC) BPPV</b> pattern of the right ear.',
+  'LH|RH': 'Both horizontal canals driven together: the horizontal drives are equal and opposite — no net beat (a balanced push, as in normal symmetric function).',
+};
 
 const $  = s => document.querySelector(s);
 const SVGNS = 'http://www.w3.org/2000/svg';
@@ -807,15 +847,21 @@ function buildEyes(){
    Nystagmus vector for the current state, in SCREEN coordinates.
 --------------------------------------------------------------------- */
 function nystagmusVector(){
-  const c = CANALS[state.canal];
-  const excited = state.flow === c.excitatoryFlow;
-  const sgn = excited ? 1 : -1;                       // inhibition reverses the beat…
-  const amp = excited ? 1 : 0.45;                     // …and weakens it
-  let fx=0, fy=0, ft=0;                               // FAST-phase components (screen)
-  if(c.fast.h) fx = (c.fast.h==='left' ? +1 : -1);
-  if(c.fast.v) fy = (c.fast.v==='up'   ? -1 : +1);
-  if(c.fast.t) ft = (c.fast.t==='left' ? +1 : -1);
-  return { excited, amp, fx:fx*sgn, fy:fy*sgn, ft:ft*sgn, canal:c };
+  const n = state.canals.length, multi = n > 1;
+  let fx=0, fy=0, ft=0, excitedAll = true;            // FAST-phase components (screen)
+  for(const id of state.canals){
+    const c = CANALS[id];
+    const exc = multi ? true : (state.flow === c.excitatoryFlow);  // multi: each canal stimulated
+    const sgn = exc ? 1 : -1;                          // inhibition reverses the beat
+    if(c.fast.h) fx += (c.fast.h==='left' ? +1 : -1) * sgn;
+    if(c.fast.v) fy += (c.fast.v==='up'   ? -1 : +1) * sgn;
+    if(c.fast.t) ft += (c.fast.t==='left' ? +1 : -1) * sgn;
+    excitedAll = excitedAll && exc;
+  }
+  fx/=n; fy/=n; ft/=n;                                 // average — opposing drives cancel
+  const excited = multi ? true : excitedAll;
+  return { excited, amp: excited ? 1 : 0.45, fx, fy, ft,
+           canal: CANALS[state.canals[0]], multi };
 }
 
 /* ---------------------------------------------------------------------
@@ -858,7 +904,7 @@ function tick(ts){
     /* In vertical-canal BPPV the torsional component dominates in the eye on the
        side of the affected canal, the vertical component in the other eye. */
     let wLin=1, wTor=1;
-    if(v.canal.type==='vertical'){
+    if(v.canal.type==='vertical' && !v.multi){   // per-eye weighting only for a single vertical canal
       const ipsi = (v.canal.side==='L' && eye==='L') || (v.canal.side==='R' && eye==='R');
       wLin = ipsi ? 0.7 : 1.3;
       wTor = ipsi ? 1.35 : 0.6;
@@ -876,35 +922,49 @@ function tick(ts){
 /* ---------------------------------------------------------------------
    Caption + description text
 --------------------------------------------------------------------- */
-const EAR = {left:'LEFT', right:'RIGHT'};
+/* Both text helpers read the NET components (fx,fy,ft), so they describe
+   single canals and multi-canal combinations alike; cancelled components
+   (|value| ≈ 0) simply drop out. */
+const EPS = 0.05;
 function fastPhaseText(v){
   const parts = [];
-  const c = v.canal;
-  // recompute directions after possible inhibition reversal
-  if(c.fast.h){ const d = v.fx>0 ? 'left' : 'right'; parts.push(`${d.toUpperCase()}-beating (horizontal)`); }
-  if(c.fast.v){ const d = v.fy<0 ? 'UPBEAT' : 'DOWNBEAT'; parts.push(d); }
-  if(c.fast.t){ const d = v.ft>0 ? 'left' : 'right'; parts.push(`torsional — upper poles beat toward the ${EAR[d]} ear`); }
-  return parts.join(' + ');
+  if(Math.abs(v.fx) > EPS) parts.push(`${v.fx>0 ? 'LEFT' : 'RIGHT'}-beating (horizontal)`);
+  if(Math.abs(v.fy) > EPS) parts.push(v.fy<0 ? 'UPBEAT' : 'DOWNBEAT');
+  if(Math.abs(v.ft) > EPS) parts.push(`torsional — upper poles beat toward the ${v.ft>0 ? 'LEFT' : 'RIGHT'} ear`);
+  return parts.length ? parts.join(' + ') : 'no net beat (the drives cancel)';
 }
 function slowPhaseText(v){
-  const c = v.canal, parts = [];
-  if(c.fast.h){ const d = v.fx>0 ? 'right' : 'left'; parts.push(`drift toward the ${d}`); }
-  if(c.fast.v){ parts.push(v.fy<0 ? 'downward drift' : 'upward drift'); }
-  if(c.fast.t){ const d = v.ft>0 ? 'right' : 'left'; parts.push(`upper poles rotate toward the ${d} ear`); }
-  return parts.join(', ');
+  const parts = [];
+  if(Math.abs(v.fx) > EPS) parts.push(`drift toward the ${v.fx>0 ? 'right' : 'left'}`);
+  if(Math.abs(v.fy) > EPS) parts.push(v.fy<0 ? 'downward drift' : 'upward drift');
+  if(Math.abs(v.ft) > EPS) parts.push(`upper poles rotate toward the ${v.ft>0 ? 'right' : 'left'} ear`);
+  return parts.length ? parts.join(', ') : 'no net drift';
 }
 function muscleSets(){
-  const c = CANALS[state.canal];
-  const excited = state.flow === c.excitatoryFlow;
-  const ipsiEye  = c.side;                       // 'L' or 'R' (patient frame)
-  const contraEye= c.side==='L' ? 'R' : 'L';
-  const basePair = [ [ipsiEye, c.pair.ipsi], [contraEye, c.pair.contra] ];
-  const antiPair = [ [ipsiEye, ANTAGONIST[c.pair.ipsi]], [contraEye, ANTAGONIST[c.pair.contra]] ];
-  return excited ? {act:basePair, inh:antiPair, excited}
-                 : {act:antiPair, inh:basePair, excited};
+  /* Net muscle drive summed across all selected canals: a muscle excited by
+     one canal and inhibited by another nets out to neutral. */
+  const multi = state.canals.length > 1;
+  const score = {};                              // "<eye><muscle>" → net drive
+  for(const id of state.canals){
+    const c = CANALS[id];
+    const exc = multi ? true : (state.flow === c.excitatoryFlow);
+    const ipsiEye = c.side, contraEye = c.side==='L' ? 'R' : 'L';
+    for(const [e, m] of [[ipsiEye, c.pair.ipsi], [contraEye, c.pair.contra]]){
+      const s = exc ? 1 : -1;
+      score[e+m] = (score[e+m]||0) + s;
+      score[e+ANTAGONIST[m]] = (score[e+ANTAGONIST[m]]||0) - s;
+    }
+  }
+  const act=[], inh=[];
+  for(const k in score){
+    if(score[k] > 0) act.push([k[0], k.slice(1)]);
+    else if(score[k] < 0) inh.push([k[0], k.slice(1)]);
+  }
+  return {act, inh, excited: multi ? true : (state.flow === CANALS[state.canals[0]].excitatoryFlow)};
 }
 
 function updateCaption(v){
+  if(v.multi) return updateMultiCaption(v);
   const c = v.canal;
   const {act, inh} = muscleSets();
   const mtxt = arr => arr.map(([e,m]) => `${m} (${e==='L'?'left':'right'} eye)`).join(' + ');
@@ -920,11 +980,11 @@ function updateCaption(v){
         ? `Excites <b>${mtxt(act)}</b>; antagonists inhibited: ${mtxt(inh)}.<br>`
         : `Inhibits <b>${mtxt(inh)}</b>; their antagonists (${mtxt(act)}) act relatively unopposed.<br>`) +
       `<b>Slow phase:</b> ${slowPhaseText(v)}. <b>Fast phase:</b> ${fastPhaseText(v)}.`;
-    const note = v.excited ? (CLIN_NOTES[state.canal+'|true'] || '') : INHIB_NOTE;
+    const note = v.excited ? (CLIN_NOTES[state.canals[0]+'|true'] || '') : INHIB_NOTE;
     $('#clinNote').innerHTML = note;
     $('#clinNote').style.display = note ? '' : 'none';
   } else {
-    const where = {A:'front (anterior)', H:'side (horizontal)', P:'back (posterior)'}[state.canal[1]];
+    const where = {A:'front (anterior)', H:'side (horizontal)', P:'back (posterior)'}[state.canals[0][1]];
     const side = c.side==='L' ? 'left' : 'right';
     $('#caption').innerHTML =
       `The <b>${where} balance canal of the ${side} ear</b> is being stimulated. ` +
@@ -955,6 +1015,42 @@ function updateRose(v){
   } else $('#torArc').style.display = 'none';
   $('#roseLbl').textContent = 'coral = fast phase · navy = slow phase';
   $('#roseLbl2').textContent = v.ft!==0 ? 'curved arrow = torsional fast phase (upper poles)' : '';
+}
+
+/* ---- multi-canal combined stimulation: caption ---- */
+function updateMultiCaption(v){
+  const names = state.canals.map(id=>CANALS[id].label).join(' + ');
+  const {act, inh} = muscleSets();
+  const mtxt = arr => arr.length
+      ? arr.map(([e,m]) => `${m} (${e==='L'?'left':'right'})`).join(' + ')
+      : 'none — the drives cancel';
+  // which axes had individual drive that cancelled in the sum?
+  const had = {h:false, v:false, t:false};
+  for(const id of state.canals){
+    const f = CANALS[id].fast;
+    if(f.h) had.h = true; if(f.v) had.v = true; if(f.t) had.t = true;
+  }
+  const cancels = [];
+  if(had.h && Math.abs(v.fx) <= EPS) cancels.push('horizontal');
+  if(had.v && Math.abs(v.fy) <= EPS) cancels.push('vertical');
+  if(had.t && Math.abs(v.ft) <= EPS) cancels.push('torsional');
+  if(state.mode==='teaching'){
+    $('#caption').innerHTML =
+      `<b>Combined stimulation — ${names}</b> (each canal driven with its excitatory flow; the responses sum as vectors).<br>` +
+      `Net muscle drive — excited: <b>${mtxt(act)}</b>; inhibited: ${mtxt(inh)}.<br>` +
+      `<b>Slow phase:</b> ${slowPhaseText(v)}. <b>Fast phase:</b> ${fastPhaseText(v)}.` +
+      (cancels.length ? ` The opposing <b>${cancels.join(' and ')}</b> component${cancels.length>1?'s':''} cancel.` : '');
+    const key = state.canals.length===2 ? [...state.canals].sort().join('|') : null;
+    const note = (key && COMBO_NOTES[key]) || '';
+    $('#clinNote').innerHTML = note;
+    $('#clinNote').style.display = note ? '' : 'none';
+  } else {
+    $('#caption').innerHTML =
+      `<b>More than one balance canal is firing at once.</b> Their pulls add together — the eyes jerk in the combined direction you see. ` +
+      `Tap a highlighted canal to switch it off again.`;
+    $('#clinNote').style.display = 'none';
+  }
+  $('#beatLabel').textContent = state.mode==='teaching' ? 'combined stimulation (each selected canal excitatory)' : '';
 }
 
 /* ---- single-muscle explore mode: caption + rose ---- */
@@ -1007,11 +1103,12 @@ function actionVector(){
 }
 
 function render(){
-  const c = CANALS[state.canal];
   const muscleMode = !!state.selMuscle;
+  const multi = state.canals.length > 1 && !muscleMode;
+  const c = CANALS[state.canals[0]];
   // canal buttons + svg highlighting (no canal selected while exploring a muscle)
   for(const id in CANALS){
-    const sel = id===state.canal && !muscleMode;
+    const sel = state.canals.includes(id) && !muscleMode;
     $('#btn'+id).classList.toggle('sel', sel);
     $('#tube'+id).classList.toggle('sel', sel);
     $('#amp'+id).classList.toggle('sel', sel);
@@ -1019,11 +1116,14 @@ function render(){
     const f = $('#flow'+id);
     f.classList.toggle('on', sel);
     f.classList.remove('toAmpulla','fromAmpulla');
-    if(sel) f.classList.add(state.flow==='petal' ? 'toAmpulla' : 'fromAmpulla');
+    if(sel){
+      const fl = multi ? CANALS[id].excitatoryFlow : state.flow;   // multi: each canal stimulated
+      f.classList.add(fl==='petal' ? 'toAmpulla' : 'fromAmpulla');
+    }
   }
   // "ampulla" pointer label onto the selected canal's ampulla bulb
   {
-    const amp = $('#amp'+state.canal);
+    const amp = $('#amp'+state.canals[0]);
     const cx = +amp.getAttribute('cx'), cy = +amp.getAttribute('cy');
     const m = amp.getCTM();             // local → headSvg viewport coords
     const ax = m.a*cx + m.c*cy + m.e, ay = m.b*cx + m.d*cy + m.f;
@@ -1034,10 +1134,12 @@ function render(){
     lbl.setAttribute('text-anchor', left ? 'end' : 'start');
     ptr.setAttribute('x1', ax); ptr.setAttribute('y1', ay - 5);
     ptr.setAttribute('x2', lx + (left ? 2 : -2)); ptr.setAttribute('y2', ly);
-    lbl.style.display = muscleMode ? 'none' : '';
-    ptr.style.display = muscleMode ? 'none' : '';
+    lbl.style.display = (muscleMode || multi) ? 'none' : '';
+    ptr.style.display = (muscleMode || multi) ? 'none' : '';
   }
   $('#flowRow').classList.toggle('dim', muscleMode);
+  $('#flowRow').classList.toggle('off', multi);
+  $('#multiHint').style.display = multi ? '' : 'none';
   // flow buttons + excitatory/inhibitory tags for THIS canal
   document.querySelectorAll('#flowRow button').forEach(b=>{
     b.classList.toggle('sel', b.dataset.flow===state.flow);
@@ -1081,6 +1183,8 @@ function render(){
     for(const eye of ['R','L'])
       $('#eyetag'+eye).textContent =
         (eye===state.selMuscle.eye && state.mode==='teaching') ? 'acting eye' : '';
+  } else if(multi){
+    for(const eye of ['R','L']) $('#eyetag'+eye).textContent = '';
   } else {
     const vertical = c.type==='vertical';
     for(const eye of ['R','L']){
@@ -1100,8 +1204,9 @@ function render(){
     const v = nystagmusVector();
     updateCaption(v);
     updateRose(v);
-    $('#miniStatus').textContent =
-      `${c.label} · ${state.flow==='petal'?'ampullopetal':'ampullofugal'} (${v.excited?'excitatory':'inhibitory'}) → ${fastPhaseText(v)}`;
+    $('#miniStatus').textContent = multi
+      ? `${state.canals.map(id=>CANALS[id].label).join(' + ')} (combined stimulation) → ${fastPhaseText(v)}`
+      : `${c.label} · ${state.flow==='petal'?'ampullopetal':'ampullofugal'} (${v.excited?'excitatory':'inhibitory'}) → ${fastPhaseText(v)}`;
   }
 
   // teaching-only elements
