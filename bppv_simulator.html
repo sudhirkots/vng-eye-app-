@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BPPV Nystagmus Simulator — Canals, Muscles &amp; Excitation</title>
+<style>
+  /* ---------- Clinical light theme (navy + coral, per Dr. K's slide style) ---------- */
+  :root{
+    --navy:#1c3a5e; --navy-soft:#3d5a80; --coral:#e2543a; --coral-soft:#f4a08f;
+    --blue-inhib:#4a7fb5; --bg:#f2f5f9; --card:#ffffff; --line:#dde4ec;
+    --ink:#22303f; --ink-soft:#5a6b7d; --neutral-muscle:#c9ccd4;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"Segoe UI",system-ui,-apple-system,Arial,sans-serif;background:var(--bg);color:var(--ink)}
+  header{background:var(--navy);color:#fff;padding:14px 22px;display:flex;flex-wrap:wrap;align-items:center;gap:14px}
+  header h1{font-size:1.25rem;margin:0;font-weight:600}
+  header .accent{background:var(--coral);border-radius:999px;padding:2px 12px;font-size:.8rem;font-weight:600;letter-spacing:.4px}
+  header .spacer{flex:1}
+  .modeSwitch{display:flex;border:1px solid rgba(255,255,255,.45);border-radius:999px;overflow:hidden}
+  .modeSwitch button{background:transparent;color:#fff;border:0;padding:6px 16px;cursor:pointer;font-size:.85rem}
+  .modeSwitch button.on{background:#fff;color:var(--navy);font-weight:600}
+
+  main{max-width:1280px;margin:0 auto;padding:16px;display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:980px){main{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px;box-shadow:0 1px 3px rgba(28,58,94,.06)}
+  .card h2{margin:0 0 4px;color:var(--navy);font-size:1.02rem}
+  .card .sub{margin:0 0 10px;color:var(--ink-soft);font-size:.8rem}
+  .wide{grid-column:1 / -1}
+
+  /* canal selector buttons */
+  .canalBtns{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:10px}
+  .canalBtns .rowLabel{grid-column:1/-1;font-size:.72rem;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.6px;margin-top:4px}
+  .canalBtns button{border:1.5px solid var(--line);background:#fbfcfe;border-radius:9px;padding:7px 4px;cursor:pointer;font-size:.85rem;color:var(--ink)}
+  .canalBtns button.sel{border-color:var(--coral);background:#fdeee9;font-weight:600;color:var(--navy)}
+
+  /* flow toggle */
+  .flowRow{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+  .flowRow button{flex:1;min-width:180px;border:1.5px solid var(--line);background:#fbfcfe;border-radius:9px;padding:8px;cursor:pointer;font-size:.85rem;text-align:left}
+  .flowRow button.sel{border-color:var(--navy);background:#eef3f9;font-weight:600}
+  .flowRow .tag{display:inline-block;border-radius:999px;padding:1px 9px;font-size:.7rem;font-weight:700;margin-left:6px;vertical-align:1px}
+  .tag.exc{background:#fdeee9;color:var(--coral)}
+  .tag.inh{background:#e8f0f8;color:var(--blue-inhib)}
+
+  svg{display:block;width:100%;height:auto}
+  svg text{font-family:inherit}
+  .canalTube{fill:none;stroke:#b9c3cf;stroke-width:8;stroke-linecap:round;cursor:pointer}
+  .canalTube.sel{stroke:var(--coral)}
+  .canalHit{fill:none;stroke:rgba(0,0,0,0);stroke-width:20;cursor:pointer;pointer-events:stroke}
+  .flowDash{fill:none;stroke:#fff;stroke-width:3;stroke-dasharray:5 9;stroke-linecap:round;pointer-events:none;opacity:0}
+  .flowDash.on{opacity:1}
+  /* stroke-dashoffset INCREASING moves dashes toward the path START = toward the ampulla */
+  .flowDash.toAmpulla{animation:dashTo 1s linear infinite}
+  .flowDash.fromAmpulla{animation:dashFrom 1s linear infinite}
+  @keyframes dashTo{from{stroke-dashoffset:0}to{stroke-dashoffset:28}}
+  @keyframes dashFrom{from{stroke-dashoffset:28}to{stroke-dashoffset:0}}
+  .ampulla{fill:#8fa0b3;stroke:#6c7f94;stroke-width:1.5;cursor:pointer}
+  .ampulla.sel{fill:var(--coral-soft);stroke:var(--coral)}
+  .canalLabel{font-size:13px;font-weight:700;fill:var(--ink-soft);cursor:pointer}
+  .canalLabel.sel{fill:var(--coral)}
+
+  .muscle{stroke:#9aa3ae;stroke-width:1.2;fill:var(--neutral-muscle);transition:fill .25s}
+  .muscle.excited{fill:var(--coral);stroke:#b53c25;animation:pulse 1.1s ease-in-out infinite}
+  .muscle.inhibited{fill:var(--blue-inhib);opacity:.55}
+  @keyframes pulse{0%,100%{filter:none}50%{filter:drop-shadow(0 0 6px rgba(226,84,58,.85))}}
+  .mLabel{font-size:12px;font-weight:700;fill:var(--ink-soft)}
+  .mLabel.excited{fill:var(--coral)}
+  .mLabel.inhibited{fill:var(--blue-inhib)}
+
+  .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:.78rem;color:var(--ink-soft);margin-top:8px}
+  .legend .sw{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-2px;margin-right:5px}
+
+  /* animated-eyes card */
+  .eyeCtrls{display:flex;gap:8px;align-items:center;margin-top:6px}
+  .eyeCtrls button{border:1.5px solid var(--line);background:#fbfcfe;border-radius:8px;padding:5px 12px;cursor:pointer;font-size:.8rem}
+  .eyeCtrls button.on{border-color:var(--navy);background:#eef3f9;font-weight:600}
+
+  .caption{margin-top:12px;border-left:4px solid var(--coral);background:#fbf6f4;border-radius:0 10px 10px 0;padding:10px 14px;font-size:.92rem;line-height:1.5}
+  .caption b{color:var(--navy)}
+  .clinNote{margin-top:8px;font-size:.83rem;color:var(--ink-soft);background:#f2f6fb;border-radius:8px;padding:8px 12px}
+  .clinNote b{color:var(--navy)}
+
+  details.matrix{margin-top:14px}
+  details.matrix summary{cursor:pointer;color:var(--navy);font-weight:600;font-size:.9rem}
+  table{border-collapse:collapse;width:100%;margin-top:8px;font-size:.8rem}
+  th,td{border:1px solid var(--line);padding:5px 8px;text-align:left}
+  th{background:#eef3f9;color:var(--navy)}
+
+  footer{max-width:1280px;margin:0 auto;padding:6px 16px 22px;color:var(--ink-soft);font-size:.75rem}
+  .patientHidden{display:none !important}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>BPPV Nystagmus Simulator</h1>
+  <span class="accent">Phase 1 · Canals &amp; Muscles</span>
+  <div class="spacer"></div>
+  <div class="modeSwitch">
+    <button id="modeTeach" class="on">Teaching</button>
+    <button id="modePatient">Patient</button>
+  </div>
+</header>
+
+<main>
+
+  <!-- ==================== CANAL PANEL ==================== -->
+  <section class="card">
+    <h2>Semicircular canals <span style="font-weight:400;color:var(--ink-soft);font-size:.8rem">— head viewed from above (schematic, not to scale)</span></h2>
+    <p class="sub">Click a canal (or use the buttons), then choose the endolymph flow direction.
+       AC/PC pairs lie in the LARP / RALP planes (~45° to the sagittal plane).</p>
+    <svg id="headSvg" viewBox="0 0 520 440" aria-label="Semicircular canal schematic"></svg>
+    <div class="canalBtns" id="canalBtns"></div>
+    <div class="flowRow" id="flowRow">
+      <button data-flow="petal">Ampullopetal <span style="color:var(--ink-soft)">(toward ampulla)</span><span class="tag" id="tagPetal"></span></button>
+      <button data-flow="fugal">Ampullofugal <span style="color:var(--ink-soft)">(away from ampulla)</span><span class="tag" id="tagFugal"></span></button>
+    </div>
+  </section>
+
+  <!-- ==================== MUSCLE PANEL ==================== -->
+  <section class="card">
+    <h2>Extraocular muscles <span style="font-weight:400;color:var(--ink-soft);font-size:.8rem">— examiner's view (patient's right eye on your left)</span></h2>
+    <p class="sub" id="musclesSub">Excited muscles glow coral; their antagonists (inhibited) turn blue.</p>
+    <svg id="musclesSvg" viewBox="0 0 640 340" aria-label="Extraocular muscles"></svg>
+    <div class="legend">
+      <span><span class="sw" style="background:var(--coral)"></span>Excited / contracting</span>
+      <span><span class="sw" style="background:var(--blue-inhib)"></span>Inhibited / relaxing</span>
+      <span><span class="sw" style="background:var(--neutral-muscle)"></span>Not driven by this canal</span>
+    </div>
+  </section>
+
+  <!-- ==================== ANIMATED EYES ==================== -->
+  <section class="card wide">
+    <h2>Resulting nystagmus <span style="font-weight:400;color:var(--ink-soft);font-size:.8rem">— examiner's view; the iris spokes make torsion visible</span></h2>
+    <div class="eyeCtrls">
+      <button id="btnPause">⏸ Pause</button>
+      <button id="btnSlow">🐢 Slow motion</button>
+      <span id="beatLabel" style="font-size:.85rem;color:var(--ink-soft)"></span>
+    </div>
+    <svg id="eyesSvg" viewBox="0 0 660 315" aria-label="Animated nystagmus"></svg>
+    <div class="caption" id="caption"></div>
+    <div class="clinNote" id="clinNote"></div>
+
+    <details class="matrix" id="matrixBox">
+      <summary>Reference — full canal → muscle → nystagmus matrix</summary>
+      <table id="matrixTable"></table>
+    </details>
+  </section>
+
+</main>
+
+<footer>
+  Schematic teaching tool — canal geometry is stylised (true canal planes: horizontal canals pitched ~30° up
+  anteriorly; anterior/posterior canals ~45° to sagittal, LA∥RP and RA∥LP).
+  Phase 2 will add positional manoeuvres (Dix-Hallpike, supine roll) with otoconia movement.
+</footer>
+
+<script>
+"use strict";
+
+/* =====================================================================
+   PHYSIOLOGY TRUTH TABLE  (verified by Dr. K, 2026-08-21)
+   ---------------------------------------------------------------------
+   Ewald's laws as implemented:
+     1. Eye movements occur in the plane of the stimulated canal.
+     2. HORIZONTAL canal: AMPULLOPETAL flow is excitatory.
+     3. VERTICAL canals (anterior + posterior): AMPULLOFUGAL flow is excitatory.
+   Excitatory canal → muscle pairings (antagonists in the same eyes are inhibited):
+     Horizontal  → ipsilateral MR + contralateral LR   (fast phase beats TOWARD the excited side)
+     Posterior   → ipsilateral SO + contralateral IR   (UPBEAT + torsion, upper poles toward excited ear)
+     Anterior    → ipsilateral SR + contralateral IO   (DOWNBEAT + torsion, upper poles toward excited ear)
+   Inhibition (flow opposite the excitatory direction) reverses the beat and is
+   WEAKER than excitation (excitation–inhibition asymmetry).
+   fast: h = horizontal beat direction (patient's frame), v = vertical, t = ear the
+   upper poles beat toward during the fast phase.
+   ===================================================================== */
+const CANALS = {
+  LA: { side:'L', label:'Left anterior',    type:'vertical',   excitatoryFlow:'fugal',
+        pair:{ipsi:'SR', contra:'IO'}, fast:{v:'down', t:'left'} },
+  LH: { side:'L', label:'Left horizontal',  type:'horizontal', excitatoryFlow:'petal',
+        pair:{ipsi:'MR', contra:'LR'}, fast:{h:'left'} },
+  LP: { side:'L', label:'Left posterior',   type:'vertical',   excitatoryFlow:'fugal',
+        pair:{ipsi:'SO', contra:'IR'}, fast:{v:'up', t:'left'} },
+  RA: { side:'R', label:'Right anterior',   type:'vertical',   excitatoryFlow:'fugal',
+        pair:{ipsi:'SR', contra:'IO'}, fast:{v:'down', t:'right'} },
+  RH: { side:'R', label:'Right horizontal', type:'horizontal', excitatoryFlow:'petal',
+        pair:{ipsi:'MR', contra:'LR'}, fast:{h:'right'} },
+  RP: { side:'R', label:'Right posterior',  type:'vertical',   excitatoryFlow:'fugal',
+        pair:{ipsi:'SO', contra:'IR'}, fast:{v:'up', t:'right'} },
+};
+const ANTAGONIST = { MR:'LR', LR:'MR', SR:'IR', IR:'SR', SO:'IO', IO:'SO' };
+const MUSCLE_NAMES = { MR:'Medial rectus', LR:'Lateral rectus', SR:'Superior rectus',
+                       IR:'Inferior rectus', SO:'Superior oblique', IO:'Inferior oblique' };
+
+/* Clinical correlate shown in teaching mode, keyed canalId + '|' + excited(bool) */
+const CLIN_NOTES = {
+  'LP|true':  "Classic <b>left posterior-canal BPPV</b>: in the left Dix-Hallpike, canalith debris falls away from the cupula (ampullofugal) → excitation → upbeat–torsional nystagmus toward the left (downmost) ear.",
+  'RP|true':  "Classic <b>right posterior-canal BPPV</b>: in the right Dix-Hallpike, debris moves ampullofugally → excitation → upbeat–torsional nystagmus toward the right (downmost) ear.",
+  'LH|true':  "<b>Left horizontal-canal BPPV (geotropic)</b>: rolling to the LEFT in the supine roll test drives debris ampullopetally → excitation → strong left-beating (geotropic) nystagmus. The side with the stronger response is the affected ear.",
+  'RH|true':  "<b>Right horizontal-canal BPPV (geotropic)</b>: rolling to the RIGHT drives debris ampullopetally → strong right-beating (geotropic) nystagmus.",
+  'LA|true':  "<b>Anterior-canal BPPV is rare.</b> Left AC excitation gives downbeat nystagmus with torsion toward the left ear — consider central mimics whenever you see downbeat.",
+  'RA|true':  "<b>Anterior-canal BPPV is rare.</b> Right AC excitation gives downbeat nystagmus with torsion toward the right ear — consider central mimics whenever you see downbeat.",
+};
+const INHIB_NOTE = "Inhibitory responses are <b>weaker</b> than excitatory ones (excitation–inhibition asymmetry) — the simulated beat is smaller. Functionally this resembles excitation of the contralateral coplanar canal.";
+
+/* ---------------------------------------------------------------------
+   App state
+--------------------------------------------------------------------- */
+const state = { canal:'LP', flow:'fugal', mode:'teaching', paused:false, slowmo:false };
+
+const $  = s => document.querySelector(s);
+const SVGNS = 'http://www.w3.org/2000/svg';
+function el(tag, attrs, parent){
+  const n = document.createElementNS(SVGNS, tag);
+  for(const k in attrs) n.setAttribute(k, attrs[k]);
+  if(parent) parent.appendChild(n);
+  return n;
+}
+
+/* =====================================================================
+   1. CANAL SCHEMATIC (head viewed from above; nose up; patient's LEFT on
+      the viewer's LEFT — labelled on the drawing)
+   ===================================================================== */
+const headSvg = $('#headSvg');
+const LABS = { L:{x:168, y:225, m:+1}, R:{x:352, y:225, m:-1} };  // m = mirror sign
+
+/* Local canal geometry (LEFT side; right side is a pure mirror).
+   Each canal is a C-shaped arc starting AT the ampulla (path start = ampulla),
+   so dash animation "toward path start" = ampullopetal. */
+const CANAL_GEOM = {
+  A: { ox:-12, oy:-34, rot: 45, r:30, fy:0.42, a0:180, a1:150, sweep:1,
+       lblDx:-46, lblDy:-30 },                     // anterior: NW–SE (LARP), ampulla at NW tip
+  H: { ox:  2, oy: 12, rot:  0, r:28, fy:0.85, a0:-115, a1:-69, sweep:0,
+       lblDx: 40, lblDy: 26 },                     // horizontal: near-face-on ring, ampulla anterolateral
+  P: { ox:-14, oy: 34, rot:-45, r:30, fy:0.42, a0:180, a1:150, sweep:1,
+       lblDx:-48, lblDy: 40 },                     // posterior: NE–SW (RALP), ampulla at SW tip
+};
+function arcPath(r, a0, a1, sweep){
+  const q = d => d*Math.PI/180;
+  const p0 = [r*Math.cos(q(a0)), r*Math.sin(q(a0))];
+  const p1 = [r*Math.cos(q(a1)), r*Math.sin(q(a1))];
+  return `M ${p0[0].toFixed(1)} ${p0[1].toFixed(1)} A ${r} ${r} 0 1 ${sweep} ${p1[0].toFixed(1)} ${p1[1].toFixed(1)}`;
+}
+
+function buildHead(){
+  // head outline
+  el('ellipse', {cx:260, cy:235, rx:172, ry:185, fill:'#faf5ef', stroke:'#c9bfae', 'stroke-width':2}, headSvg);
+  el('path', {d:'M 244 55 L 260 24 L 276 55', fill:'#faf5ef', stroke:'#c9bfae', 'stroke-width':2, 'stroke-linejoin':'round'}, headSvg); // nose
+  el('ellipse', {cx:84,  cy:235, rx:11, ry:30, fill:'#f3e9dd', stroke:'#c9bfae', 'stroke-width':1.5}, headSvg); // L ear
+  el('ellipse', {cx:436, cy:235, rx:11, ry:30, fill:'#f3e9dd', stroke:'#c9bfae', 'stroke-width':1.5}, headSvg); // R ear
+  const t1 = el('text', {x:64, y:120, 'font-size':15, 'font-weight':700, fill:'#8a7a63'}, headSvg); t1.textContent='LEFT';
+  const t2 = el('text', {x:412, y:120, 'font-size':15, 'font-weight':700, fill:'#8a7a63'}, headSvg); t2.textContent='RIGHT';
+  const t3 = el('text', {x:238, y:16, 'font-size':11, fill:'#8a7a63'}, headSvg); t3.textContent='anterior';
+  const t4 = el('text', {x:232, y:434, 'font-size':11, fill:'#8a7a63'}, headSvg); t4.textContent='posterior';
+
+  // faint LARP / RALP plane lines through the head centre
+  for(const [x1,y1,x2,y2,lab,lx,ly] of [
+      [120, 95, 400, 375, 'LARP', 402, 392],
+      [400, 95, 120, 375, 'RALP', 92,  392]]){
+    el('line', {x1,y1,x2,y2, stroke:'#e3d9c9', 'stroke-width':1.5, 'stroke-dasharray':'3 6'}, headSvg);
+    const t = el('text', {x:lx, y:ly, 'font-size':10, fill:'#b3a488'}, headSvg);
+    t.textContent = lab;
+  }
+
+  // labyrinths
+  for(const side of ['L','R']){
+    const lab = LABS[side];
+    // vestibule
+    el('ellipse', {cx:lab.x, cy:lab.y, rx:10, ry:13, fill:'#e6ebf1', stroke:'#b9c3cf', 'stroke-width':1.5}, headSvg);
+    for(const k of ['A','H','P']){
+      const g = CANAL_GEOM[k], id = side + k;
+      const tf = `translate(${lab.x},${lab.y}) scale(${lab.m},1) translate(${g.ox},${g.oy}) rotate(${g.rot}) scale(1,${g.fy})`;
+      const grp = el('g', {transform:tf, 'data-canal':id}, headSvg);
+      const d = arcPath(g.r, g.a0, g.a1, g.sweep);
+      el('path', {d, class:'canalTube', id:'tube'+id}, grp);
+      el('path', {d, class:'flowDash', id:'flow'+id}, grp);
+      el('path', {d, class:'canalHit'}, grp);
+      // ampulla bulb at the path START
+      const q = g.a0*Math.PI/180;
+      el('circle', {cx:g.r*Math.cos(q), cy:g.r*Math.sin(q), r:7/g.fy*0.55, class:'ampulla', id:'amp'+id,
+                    transform:`scale(1,1)`}, grp);
+      grp.addEventListener('click', ()=>{ state.canal=id; render(); });
+      // label (NOT mirrored)
+      const lx = lab.x + lab.m*(g.ox + g.lblDx), ly = lab.y + g.oy + g.lblDy;
+      const t = el('text', {x:lx, y:ly, class:'canalLabel', id:'lbl'+id, 'text-anchor': lab.m===1?'start':'end'}, headSvg);
+      t.textContent = k + 'C';
+      t.addEventListener('click', ()=>{ state.canal=id; render(); });
+    }
+  }
+  const n1 = el('text', {x:12, y:420, 'font-size':10.5, fill:'#98a4b1'}, headSvg);
+  n1.textContent = 'dots on the selected canal';
+  const n2 = el('text', {x:12, y:434, 'font-size':10.5, fill:'#98a4b1'}, headSvg);
+  n2.textContent = 'show endolymph flow';
+  // "ampulla" pointer label — repositioned onto the selected canal's ampulla at render time
+  el('line', {id:'ampPtr', x1:0,y1:0,x2:0,y2:0, stroke:'#e2543a', 'stroke-width':1.2, opacity:.8}, headSvg);
+  const at = el('text', {id:'ampLbl', x:0, y:0, 'font-size':11, 'font-weight':600, fill:'#e2543a'}, headSvg);
+  at.textContent = 'ampulla';
+}
+
+/* canal selector buttons */
+function buildCanalButtons(){
+  const box = $('#canalBtns');
+  for(const side of ['L','R']){
+    const lbl = document.createElement('div');
+    lbl.className='rowLabel';
+    lbl.textContent = side==='L' ? "Patient's LEFT ear" : "Patient's RIGHT ear";
+    box.appendChild(lbl);
+    for(const k of ['A','H','P']){
+      const id = side+k;
+      const b = document.createElement('button');
+      b.id = 'btn'+id;
+      b.textContent = {A:'Anterior',H:'Horizontal',P:'Posterior'}[k];
+      b.addEventListener('click', ()=>{ state.canal=id; render(); });
+      box.appendChild(b);
+    }
+  }
+}
+
+/* =====================================================================
+   2. MUSCLE PANEL — examiner's view: patient's RIGHT eye drawn on screen-left
+   ===================================================================== */
+const musclesSvg = $('#musclesSvg');
+const EYES_M = {                        // muscle-diagram eyes (patient frame)
+  R: {cx:165, cy:150, nasal:+1},       // patient's RIGHT eye, screen-left; nasal = +x (toward midline)
+  L: {cx:475, cy:150, nasal:-1},       // patient's LEFT eye,  screen-right; nasal = -x
+};
+/* Muscle placement angles depend on which side is nasal.
+   Angles in screen degrees: 0 = +x (right), 90 = down, -90 = up. */
+function muscleAngle(eye, m){
+  const n = EYES_M[eye].nasal;                 // +1 → nasal is screen-right
+  switch(m){
+    case 'MR': return n===1 ? 0 : 180;
+    case 'LR': return n===1 ? 180 : 0;
+    case 'SR': return -90;
+    case 'IR': return  90;
+    case 'SO': return n===1 ? -42 : -138;      // superonasal
+    case 'IO': return n===1 ?  42 :  138;      // inferonasal
+  }
+}
+function buildMuscles(){
+  // nose bridge glyph between the eyes
+  el('path', {d:'M 312 110 Q 320 160 308 205 M 328 110 Q 320 160 332 205', fill:'none', stroke:'#d8cfc2', 'stroke-width':3, 'stroke-linecap':'round'}, musclesSvg);
+  for(const eye of ['R','L']){
+    const E = EYES_M[eye];
+    el('circle', {cx:E.cx, cy:E.cy, r:52, fill:'#fdfdfd', stroke:'#aab4c0', 'stroke-width':2}, musclesSvg);
+    el('circle', {cx:E.cx, cy:E.cy, r:20, fill:'#7a5230'}, musclesSvg);       // iris
+    el('circle', {cx:E.cx, cy:E.cy, r:9,  fill:'#1b1b1b'}, musclesSvg);       // pupil
+    const cap = el('text', {x:E.cx, y:E.cy+134, 'text-anchor':'middle', 'font-size':13, 'font-weight':600, fill:'#5a6b7d'}, musclesSvg);
+    cap.textContent = eye==='R' ? "Patient's RIGHT eye" : "Patient's LEFT eye";
+    for(const m of ['MR','LR','SR','IR','SO','IO']){
+      const a = muscleAngle(eye, m) * Math.PI/180;
+      const isObl = (m==='SO'||m==='IO');
+      const rMid = 79;
+      const mx = E.cx + rMid*Math.cos(a), my = E.cy + rMid*Math.sin(a);
+      // spindle: ellipse with long axis pointing radially (toward the globe)
+      el('ellipse', {cx:mx, cy:my, rx: isObl?22:25, ry: isObl?6.5:8.5,
+                     transform:`rotate(${muscleAngle(eye,m)} ${mx} ${my})`,
+                     class:'muscle', id:`mus${eye}${m}`}, musclesSvg);
+      // tendon line to globe
+      const tx = E.cx + 53*Math.cos(a), ty = E.cy + 53*Math.sin(a);
+      const t2x = E.cx + (rMid-(isObl?20:23))*Math.cos(a), t2y = E.cy + (rMid-(isObl?20:23))*Math.sin(a);
+      el('line', {x1:tx, y1:ty, x2:t2x, y2:t2y, stroke:'#9aa3ae', 'stroke-width':2}, musclesSvg);
+      // label
+      const rl = 112;
+      const lx = E.cx + rl*Math.cos(a), ly = E.cy + rl*Math.sin(a) + 4;
+      const t = el('text', {x:lx, y:ly, 'text-anchor':'middle', class:'mLabel', id:`mlbl${eye}${m}`}, musclesSvg);
+      t.textContent = m;
+      const tip = el('title', {}, t); tip.textContent = MUSCLE_NAMES[m];
+    }
+  }
+  const hdr = el('text', {x:320, y:20, 'text-anchor':'middle', 'font-size':12, fill:'#98a4b1'}, musclesSvg);
+  hdr.textContent = "Examiner's view (you are facing the patient)";
+}
+
+/* =====================================================================
+   3. ANIMATED EYES — examiner's view.
+   Screen mapping (patient frame → screen): patient's LEFT = screen RIGHT.
+     fast.h 'left'  → +x   |  'right' → −x
+     fast.v 'up'    → −y   |  'down'  → +y
+     fast.t 'left'  → +deg (clockwise to the viewer: upper poles move toward
+                            screen-right = patient's left ear); 'right' → −deg
+   ===================================================================== */
+const eyesSvg = $('#eyesSvg');
+const EYES_A = { R:{cx:170, cy:120}, L:{cx:480, cy:120} };   // patient R on screen-left
+const irisGroups = {};
+function buildEyes(){
+  for(const eye of ['R','L']){
+    const E = EYES_A[eye];
+    el('circle', {cx:E.cx, cy:E.cy, r:72, fill:'#ffffff', stroke:'#aab4c0', 'stroke-width':2.5}, eyesSvg);
+    // iris group — translated/rotated each animation frame
+    const g = el('g', {id:'iris'+eye}, eyesSvg);
+    el('circle', {cx:0, cy:0, r:30, fill:'#7a5230', stroke:'#5d3d22', 'stroke-width':1.5}, g);
+    // spokes make torsion visible (clock-face convention)
+    for(let i=0;i<8;i++){
+      const a = i*Math.PI/4;
+      el('line', {x1:16*Math.cos(a), y1:16*Math.sin(a), x2:28*Math.cos(a), y2:28*Math.sin(a),
+                  stroke:'#c9a06a', 'stroke-width':i===6?4:1.6}, g); // i=6 → 12-o'clock spoke, thicker marker
+    }
+    el('circle', {cx:0, cy:0, r:13, fill:'#141414'}, g);
+    el('path', {d:'M -5 -6 A 7 7 0 0 1 3 -8', fill:'none', stroke:'rgba(255,255,255,.75)', 'stroke-width':2.5, 'stroke-linecap':'round',
+                transform:'translate(-3,-2)'}, g);  // light reflex
+    irisGroups[eye] = g;
+    const cap = el('text', {x:E.cx, y:E.cy+116, 'text-anchor':'middle', 'font-size':12.5, 'font-weight':600, fill:'#5a6b7d'}, eyesSvg);
+    cap.textContent = eye==='R' ? "Patient's RIGHT eye" : "Patient's LEFT eye";
+    const tag = el('text', {x:E.cx, y:E.cy+134, 'text-anchor':'middle', 'font-size':10.5, fill:'#98a4b1', id:'eyetag'+eye}, eyesSvg);
+    tag.textContent = '';
+  }
+  // central direction rose: fast (coral, thick) and slow (navy, thin) arrows + torsion arc
+  const defs = el('defs', {}, eyesSvg);
+  for(const [id,color] of [['ahFast','#e2543a'],['ahSlow','#1c3a5e']]){
+    const mk = el('marker', {id, viewBox:'0 0 10 10', refX:8, refY:5, markerWidth:5, markerHeight:5, orient:'auto-start-reverse'}, defs);
+    el('path', {d:'M 0 0 L 10 5 L 0 10 z', fill:color}, mk);
+  }
+  const rose = el('g', {id:'rose', transform:'translate(325,110)'}, eyesSvg);
+  el('circle', {cx:0, cy:0, r:4, fill:'#98a4b1'}, rose);
+  el('line', {id:'fastArrow', x1:0, y1:0, x2:0, y2:0, stroke:'#e2543a', 'stroke-width':4, 'marker-end':'url(#ahFast)', 'stroke-linecap':'round'}, rose);
+  el('line', {id:'slowArrow', x1:0, y1:0, x2:0, y2:0, stroke:'#1c3a5e', 'stroke-width':2, 'marker-end':'url(#ahSlow)', 'stroke-linecap':'round'}, rose);
+  el('path', {id:'torArc', d:'', fill:'none', stroke:'#e2543a', 'stroke-width':2.5, 'marker-end':'url(#ahFast)'}, rose);
+  const rl = el('text', {x:325, y:283, 'text-anchor':'middle', 'font-size':11.5, fill:'#5a6b7d', id:'roseLbl'}, eyesSvg);
+  const rl2 = el('text', {x:325, y:300, 'text-anchor':'middle', 'font-size':11.5, fill:'#5a6b7d', id:'roseLbl2'}, eyesSvg);
+  rl.textContent=''; rl2.textContent='';
+}
+
+/* ---------------------------------------------------------------------
+   Nystagmus vector for the current state, in SCREEN coordinates.
+--------------------------------------------------------------------- */
+function nystagmusVector(){
+  const c = CANALS[state.canal];
+  const excited = state.flow === c.excitatoryFlow;
+  const sgn = excited ? 1 : -1;                       // inhibition reverses the beat…
+  const amp = excited ? 1 : 0.45;                     // …and weakens it
+  let fx=0, fy=0, ft=0;                               // FAST-phase components (screen)
+  if(c.fast.h) fx = (c.fast.h==='left' ? +1 : -1);
+  if(c.fast.v) fy = (c.fast.v==='up'   ? -1 : +1);
+  if(c.fast.t) ft = (c.fast.t==='left' ? +1 : -1);
+  return { excited, amp, fx:fx*sgn, fy:fy*sgn, ft:ft*sgn, canal:c };
+}
+
+/* ---------------------------------------------------------------------
+   Animation loop: sawtooth — long slow-phase drift, quick fast-phase reset.
+--------------------------------------------------------------------- */
+const PERIOD = 1.4, SLOW_FRAC = 0.84, LIN_AMP = 17, TOR_AMP = 15;
+let simTime = 0, lastTs = null;
+function tick(ts){
+  if(lastTs===null) lastTs = ts;
+  const dt = (ts - lastTs)/1000; lastTs = ts;
+  if(!state.paused) simTime += dt * (state.slowmo ? 0.28 : 1);
+  const ph = (simTime % PERIOD) / PERIOD;
+  /* sawtooth centred on 0: starts at +0.5 (just after a fast phase), drifts to
+     −0.5 during the slow phase, snaps back during the fast phase */
+  let s;
+  if(ph < SLOW_FRAC) s = 0.5 - ph/SLOW_FRAC;
+  else               s = -0.5 + (ph-SLOW_FRAC)/(1-SLOW_FRAC);
+  const v = nystagmusVector();
+  for(const eye of ['R','L']){
+    /* In vertical-canal BPPV the torsional component dominates in the eye on the
+       side of the affected canal, the vertical component in the other eye. */
+    let wLin=1, wTor=1;
+    if(v.canal.type==='vertical'){
+      const ipsi = (v.canal.side==='L' && eye==='L') || (v.canal.side==='R' && eye==='R');
+      wLin = ipsi ? 0.7 : 1.3;
+      wTor = ipsi ? 1.35 : 0.6;
+    }
+    const dx = v.fx * s * LIN_AMP * v.amp;
+    const dy = v.fy * s * LIN_AMP * v.amp * wLin;
+    const dg = v.ft * s * TOR_AMP * v.amp * wTor;
+    const E = EYES_A[eye];
+    irisGroups[eye].setAttribute('transform', `translate(${E.cx+dx},${E.cy+dy}) rotate(${dg})`);
+  }
+  requestAnimationFrame(tick);
+}
+
+/* ---------------------------------------------------------------------
+   Caption + description text
+--------------------------------------------------------------------- */
+const EAR = {left:'LEFT', right:'RIGHT'};
+function fastPhaseText(v){
+  const parts = [];
+  const c = v.canal;
+  // recompute directions after possible inhibition reversal
+  if(c.fast.h){ const d = v.fx>0 ? 'left' : 'right'; parts.push(`${d.toUpperCase()}-beating (horizontal)`); }
+  if(c.fast.v){ const d = v.fy<0 ? 'UPBEAT' : 'DOWNBEAT'; parts.push(d); }
+  if(c.fast.t){ const d = v.ft>0 ? 'left' : 'right'; parts.push(`torsional — upper poles beat toward the ${EAR[d]} ear`); }
+  return parts.join(' + ');
+}
+function slowPhaseText(v){
+  const c = v.canal, parts = [];
+  if(c.fast.h){ const d = v.fx>0 ? 'right' : 'left'; parts.push(`drift toward the ${d}`); }
+  if(c.fast.v){ parts.push(v.fy<0 ? 'downward drift' : 'upward drift'); }
+  if(c.fast.t){ const d = v.ft>0 ? 'right' : 'left'; parts.push(`upper poles rotate toward the ${d} ear`); }
+  return parts.join(', ');
+}
+function muscleSets(){
+  const c = CANALS[state.canal];
+  const excited = state.flow === c.excitatoryFlow;
+  const ipsiEye  = c.side;                       // 'L' or 'R' (patient frame)
+  const contraEye= c.side==='L' ? 'R' : 'L';
+  const basePair = [ [ipsiEye, c.pair.ipsi], [contraEye, c.pair.contra] ];
+  const antiPair = [ [ipsiEye, ANTAGONIST[c.pair.ipsi]], [contraEye, ANTAGONIST[c.pair.contra]] ];
+  return excited ? {act:basePair, inh:antiPair, excited}
+                 : {act:antiPair, inh:basePair, excited};
+}
+
+function updateCaption(v){
+  const c = v.canal;
+  const {act, inh} = muscleSets();
+  const mtxt = arr => arr.map(([e,m]) => `${m} (${e==='L'?'left':'right'} eye)`).join(' + ');
+  const flowWord = state.flow==='petal' ? 'Ampullopetal' : 'Ampullofugal';
+  const lawWord = c.type==='horizontal'
+      ? 'ampullopetal flow is excitatory in the horizontal canal'
+      : 'ampullofugal flow is excitatory in the vertical canals';
+  if(state.mode==='teaching'){
+    $('#caption').innerHTML =
+      `<b>${c.label} canal — ${flowWord} flow → ${v.excited ? 'EXCITATION' : 'INHIBITION'}</b> ` +
+      `(Ewald: ${lawWord}).<br>` +
+      (v.excited
+        ? `Excites <b>${mtxt(act)}</b>; antagonists inhibited: ${mtxt(inh)}.<br>`
+        : `Inhibits <b>${mtxt(inh)}</b>; their antagonists (${mtxt(act)}) act relatively unopposed.<br>`) +
+      `<b>Slow phase:</b> ${slowPhaseText(v)}. <b>Fast phase:</b> ${fastPhaseText(v)}.`;
+    const note = v.excited ? (CLIN_NOTES[state.canal+'|true'] || '') : INHIB_NOTE;
+    $('#clinNote').innerHTML = note;
+    $('#clinNote').style.display = note ? '' : 'none';
+  } else {
+    const where = {A:'front (anterior)', H:'side (horizontal)', P:'back (posterior)'}[state.canal[1]];
+    const side = c.side==='L' ? 'left' : 'right';
+    $('#caption').innerHTML =
+      `The <b>${where} balance canal of the ${side} ear</b> is being stimulated. ` +
+      `The highlighted eye muscles pull the eyes so they slowly drift, then quickly flick back — over and over. ` +
+      `This repeated jerking is called <b>nystagmus</b>, and it is what makes the room seem to spin. ` +
+      `In BPPV, loose crystals in this canal set it off when the head moves into certain positions.`;
+    $('#clinNote').style.display = 'none';
+  }
+  $('#beatLabel').textContent = state.mode==='teaching'
+      ? (v.excited ? 'excitatory response' : 'inhibitory response (weaker beat)') : '';
+}
+
+/* direction rose between the animated eyes */
+function updateRose(v){
+  const L = 32 * (v.excited ? 1 : 0.6);
+  $('#fastArrow').setAttribute('x2', (v.fx*L).toFixed(1));
+  $('#fastArrow').setAttribute('y2', (v.fy*L).toFixed(1));
+  const hasLin = (v.fx!==0 || v.fy!==0);
+  $('#fastArrow').style.display = hasLin ? '' : 'none';
+  $('#slowArrow').setAttribute('x2', (-v.fx*L*0.75).toFixed(1));
+  $('#slowArrow').setAttribute('y2', (-v.fy*L*0.75).toFixed(1));
+  $('#slowArrow').style.display = hasLin ? '' : 'none';
+  // torsion arc: drawn over the rose, mirrored for direction
+  if(v.ft!==0){
+    const s = v.ft>0 ? 1 : -1;   // +1 = clockwise to viewer
+    $('#torArc').setAttribute('d', s>0 ? 'M -34 -42 A 54 54 0 0 1 34 -42' : 'M 34 -42 A 54 54 0 0 0 -34 -42');
+    $('#torArc').style.display = '';
+  } else $('#torArc').style.display = 'none';
+  $('#roseLbl').textContent = 'coral = fast phase · navy = slow phase';
+  $('#roseLbl2').textContent = v.ft!==0 ? 'curved arrow = torsional fast phase (upper poles)' : '';
+}
+
+/* ---------------------------------------------------------------------
+   Master render — reflects `state` into every panel
+--------------------------------------------------------------------- */
+function render(){
+  const c = CANALS[state.canal];
+  // canal buttons + svg highlighting
+  for(const id in CANALS){
+    const sel = id===state.canal;
+    $('#btn'+id).classList.toggle('sel', sel);
+    $('#tube'+id).classList.toggle('sel', sel);
+    $('#amp'+id).classList.toggle('sel', sel);
+    $('#lbl'+id).classList.toggle('sel', sel);
+    const f = $('#flow'+id);
+    f.classList.toggle('on', sel);
+    f.classList.remove('toAmpulla','fromAmpulla');
+    if(sel) f.classList.add(state.flow==='petal' ? 'toAmpulla' : 'fromAmpulla');
+  }
+  // "ampulla" pointer label onto the selected canal's ampulla bulb
+  {
+    const amp = $('#amp'+state.canal);
+    const cx = +amp.getAttribute('cx'), cy = +amp.getAttribute('cy');
+    const m = amp.getCTM();             // local → headSvg viewport coords
+    const ax = m.a*cx + m.c*cy + m.e, ay = m.b*cx + m.d*cy + m.f;
+    const left = ax < 260;              // place the label away from the midline
+    const lx = ax + (left ? -26 : 26), ly = ay - 30;
+    const lbl = $('#ampLbl'), ptr = $('#ampPtr');
+    lbl.setAttribute('x', lx); lbl.setAttribute('y', ly - 3);
+    lbl.setAttribute('text-anchor', left ? 'end' : 'start');
+    ptr.setAttribute('x1', ax); ptr.setAttribute('y1', ay - 5);
+    ptr.setAttribute('x2', lx + (left ? 2 : -2)); ptr.setAttribute('y2', ly);
+  }
+  // flow buttons + excitatory/inhibitory tags for THIS canal
+  document.querySelectorAll('#flowRow button').forEach(b=>{
+    b.classList.toggle('sel', b.dataset.flow===state.flow);
+  });
+  const petalExc = c.excitatoryFlow==='petal';
+  $('#tagPetal').textContent = petalExc ? 'excitatory' : 'inhibitory';
+  $('#tagPetal').className = 'tag ' + (petalExc?'exc':'inh');
+  $('#tagFugal').textContent = petalExc ? 'inhibitory' : 'excitatory';
+  $('#tagFugal').className = 'tag ' + (petalExc?'inh':'exc');
+
+  // muscles
+  const {act, inh} = muscleSets();
+  for(const eye of ['R','L']) for(const m of ['MR','LR','SR','IR','SO','IO']){
+    const mus = $(`#mus${eye}${m}`), lbl = $(`#mlbl${eye}${m}`);
+    mus.classList.remove('excited','inhibited'); lbl.classList.remove('excited','inhibited');
+    if(act.some(([e,mm])=>e===eye&&mm===m)){ mus.classList.add('excited');  lbl.classList.add('excited'); }
+    if(inh.some(([e,mm])=>e===eye&&mm===m)){ mus.classList.add('inhibited');lbl.classList.add('inhibited'); }
+  }
+  // eye tags: which eye shows torsion vs vertical best (teaching nicety)
+  const vertical = c.type==='vertical';
+  for(const eye of ['R','L']){
+    const ipsi = (c.side===eye);
+    $('#eyetag'+eye).textContent = (vertical && state.mode==='teaching')
+      ? (ipsi ? 'torsion dominates (ipsilateral)' : 'vertical dominates (contralateral)') : '';
+  }
+
+  const v = nystagmusVector();
+  updateCaption(v);
+  updateRose(v);
+
+  // teaching-only elements
+  const teach = state.mode==='teaching';
+  $('#modeTeach').classList.toggle('on', teach);
+  $('#modePatient').classList.toggle('on', !teach);
+  $('#matrixBox').classList.toggle('patientHidden', !teach);
+  $('#musclesSub').textContent = teach
+    ? 'Excited muscles glow coral; their antagonists (inhibited) turn blue. Hover a label for the full name.'
+    : 'The glowing muscles are the ones pulling the eyes; the blue ones are relaxing.';
+  document.querySelectorAll('.mLabel').forEach(t=>t.style.display = teach ? '' : 'none');
+}
+
+/* reference matrix (teaching mode) */
+function buildMatrix(){
+  const rows = Object.entries(CANALS).map(([id,c])=>{
+    const flow = c.excitatoryFlow==='petal' ? 'Ampullopetal' : 'Ampullofugal';
+    const ipsi = c.side==='L'?'left':'right', contra = c.side==='L'?'right':'left';
+    const fast = fastPhaseText({canal:c,
+      fx:c.fast.h ? (c.fast.h==='left'?1:-1) : 0,
+      fy:c.fast.v ? (c.fast.v==='up'?-1:1) : 0,
+      ft:c.fast.t ? (c.fast.t==='left'?1:-1) : 0});
+    return `<tr><td><b>${c.label}</b></td><td>${flow}</td>` +
+           `<td>${c.pair.ipsi} (${ipsi} eye) + ${c.pair.contra} (${contra} eye)</td>` +
+           `<td>${ANTAGONIST[c.pair.ipsi]} (${ipsi}) + ${ANTAGONIST[c.pair.contra]} (${contra})</td>` +
+           `<td>${fast}</td></tr>`;
+  }).join('');
+  $('#matrixTable').innerHTML =
+    '<tr><th>Canal</th><th>Excitatory flow</th><th>Muscles excited</th><th>Muscles inhibited</th><th>Fast phase (nystagmus)</th></tr>' + rows;
+}
+
+/* ---------------------------------------------------------------------
+   Wiring
+--------------------------------------------------------------------- */
+buildHead();
+buildCanalButtons();
+buildMuscles();
+buildEyes();
+buildMatrix();
+document.querySelectorAll('#flowRow button').forEach(b=>
+  b.addEventListener('click', ()=>{ state.flow=b.dataset.flow; render(); }));
+$('#modeTeach').addEventListener('click', ()=>{ state.mode='teaching'; render(); });
+$('#modePatient').addEventListener('click', ()=>{ state.mode='patient'; render(); });
+$('#btnPause').addEventListener('click', ()=>{ state.paused=!state.paused; $('#btnPause').classList.toggle('on', state.paused); $('#btnPause').textContent = state.paused?'▶ Resume':'⏸ Pause'; });
+$('#btnSlow').addEventListener('click', ()=>{ state.slowmo=!state.slowmo; $('#btnSlow').classList.toggle('on', state.slowmo); });
+render();
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>
