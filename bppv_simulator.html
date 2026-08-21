@@ -719,6 +719,32 @@ function buildHPattern(){
 const eyesSvg = $('#eyesSvg');
 const EYES_A = { R:{cx:170, cy:120}, L:{cx:480, cy:120} };   // patient R on screen-left
 const irisGroups = {};
+const EYE_PARTS = {};   // per-eye dynamic lid elements for lid-follow
+
+/* Fissure geometry with lid offsets: u/l bow the upper/lower lid curves
+   (canthi stay fixed, as real lids do). u,l in px, + = down. */
+function fissureGeom(eye, u, l){
+  const {n, cx, cy} = EYE_PARTS[eye];
+  const lat = [cx - n*104, cy+3], med = [cx + n*100, cy+7];
+  const upper = `C ${cx-n*56} ${cy-52+u}, ${cx+n*38} ${cy-54+u}, ${med[0]} ${med[1]}`;
+  return {
+    full: `M ${lat[0]} ${lat[1]} ${upper} C ${cx+n*52} ${cy+40+l}, ${cx-n*48} ${cy+44+l}, ${lat[0]} ${lat[1]} Z`,
+    upperOnly: `M ${lat[0]} ${lat[1]} ${upper}`,
+    crease: `M ${cx-n*86} ${cy-44+u*0.6} Q ${cx-n*4} ${cy-70+u*0.8} ${cx+n*78} ${cy-48+u*0.6}`,
+  };
+}
+/* Subtle lid-follow: the upper lid tracks vertical eye position (~50%),
+   the lower lid much less (~16%). dy = current iris vertical offset. */
+function updateLids(eye, dy){
+  const P = EYE_PARTS[eye];
+  const g = fissureGeom(eye, dy*0.5, dy*0.16);
+  P.clip.setAttribute('d', g.full);
+  P.sclera.setAttribute('d', g.full);
+  P.outline.setAttribute('d', g.full);
+  P.shadow.setAttribute('d', g.upperOnly);
+  P.crease.setAttribute('d', g.crease);
+}
+
 function buildEyes(){
   const defs = el('defs', {}, eyesSvg);
   for(const eye of ['R','L']){
@@ -730,13 +756,13 @@ function buildEyes(){
     el('path', {d:`M ${cx-n*96} ${cy-54} Q ${cx-n*8} ${cy-86} ${cx+n*84} ${cy-62}`,
                 stroke:'#cfa985', 'stroke-width':7, fill:'none', 'stroke-linecap':'round'}, eyesSvg);
     // palpebral fissure (almond): medial canthus toward the nose, lateral slightly higher
-    const lat = [cx - n*104, cy+3], med = [cx + n*100, cy+7];
-    const upper = `C ${cx-n*56} ${cy-52}, ${cx+n*38} ${cy-54}, ${med[0]} ${med[1]}`;
-    const fiss = `M ${lat[0]} ${lat[1]} ${upper} C ${cx+n*52} ${cy+40}, ${cx-n*48} ${cy+44}, ${lat[0]} ${lat[1]} Z`;
+    EYE_PARTS[eye] = {n, cx, cy};
+    const med = [cx + n*100, cy+7];
+    const g0 = fissureGeom(eye, 0, 0);
     const cp = el('clipPath', {id:'fiss'+eye}, defs);
-    el('path', {d:fiss}, cp);
+    EYE_PARTS[eye].clip = el('path', {d:g0.full}, cp);
     // sclera fills the fissure; iris moves BEHIND the lids (clipped)
-    el('path', {d:fiss, fill:'#ffffff'}, eyesSvg);
+    EYE_PARTS[eye].sclera = el('path', {d:g0.full, fill:'#ffffff'}, eyesSvg);
     const wrap = el('g', {'clip-path':`url(#fiss${eye})`}, eyesSvg);
     const g = el('g', {id:'iris'+eye}, wrap);
     el('circle', {cx:0, cy:0, r:34, fill:'#7a5230', stroke:'#5d3d22', 'stroke-width':1.5}, g);
@@ -751,10 +777,10 @@ function buildEyes(){
                 transform:'translate(-4,-3)'}, g);  // light reflex
     irisGroups[eye] = g;
     // upper-lid shadow on the globe
-    el('path', {d:`M ${lat[0]} ${lat[1]} ${upper}`, stroke:'rgba(90,60,40,.16)', 'stroke-width':10, fill:'none'}, wrap);
+    EYE_PARTS[eye].shadow = el('path', {d:g0.upperOnly, stroke:'rgba(90,60,40,.16)', 'stroke-width':10, fill:'none'}, wrap);
     // lid margins, crease, caruncle at the medial canthus
-    el('path', {d:fiss, fill:'none', stroke:'#b98d6e', 'stroke-width':3, 'stroke-linejoin':'round'}, eyesSvg);
-    el('path', {d:`M ${cx-n*86} ${cy-44} Q ${cx-n*4} ${cy-70} ${cx+n*78} ${cy-48}`,
+    EYE_PARTS[eye].outline = el('path', {d:g0.full, fill:'none', stroke:'#b98d6e', 'stroke-width':3, 'stroke-linejoin':'round'}, eyesSvg);
+    EYE_PARTS[eye].crease = el('path', {d:g0.crease,
                 stroke:'#dbb896', 'stroke-width':2.5, fill:'none', 'stroke-linecap':'round'}, eyesSvg);
     el('ellipse', {cx:med[0]-n*5, cy:med[1]-1, rx:6.5, ry:8.5, fill:'#e8a08e'}, eyesSvg);
     const cap = el('text', {x:E.cx, y:E.cy+116, 'text-anchor':'middle', 'font-size':12.5, 'font-weight':600, fill:'#5a6b7d'}, eyesSvg);
@@ -818,8 +844,10 @@ function tick(ts){
       if(eye===mv.eye){
         irisGroups[eye].setAttribute('transform',
           `translate(${E.cx + mv.fx*s2*22},${E.cy + mv.fy*s2*22}) rotate(${mv.ft*s2*16})`);
+        updateLids(eye, mv.fy*s2*22);
       } else {
         irisGroups[eye].setAttribute('transform', `translate(${E.cx},${E.cy})`);
+        updateLids(eye, 0);
       }
     }
     requestAnimationFrame(tick);
@@ -840,6 +868,7 @@ function tick(ts){
     const dg = v.ft * s * TOR_AMP * v.amp * wTor;
     const E = EYES_A[eye];
     irisGroups[eye].setAttribute('transform', `translate(${E.cx+dx},${E.cy+dy}) rotate(${dg})`);
+    updateLids(eye, dy);   // subtle lid-follow on the vertical component
   }
   requestAnimationFrame(tick);
 }
