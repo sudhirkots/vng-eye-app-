@@ -720,29 +720,49 @@ const eyesSvg = $('#eyesSvg');
 const EYES_A = { R:{cx:170, cy:120}, L:{cx:480, cy:120} };   // patient R on screen-left
 const irisGroups = {};
 function buildEyes(){
+  const defs = el('defs', {}, eyesSvg);
   for(const eye of ['R','L']){
     const E = EYES_A[eye];
-    el('circle', {cx:E.cx, cy:E.cy, r:72, fill:'#ffffff', stroke:'#aab4c0', 'stroke-width':2.5}, eyesSvg);
-    // iris group — translated/rotated each animation frame
-    const g = el('g', {id:'iris'+eye}, eyesSvg);
-    el('circle', {cx:0, cy:0, r:30, fill:'#7a5230', stroke:'#5d3d22', 'stroke-width':1.5}, g);
+    const n = eye==='R' ? +1 : -1;             // screen +x toward the nose (examiner view)
+    const cx = E.cx, cy = E.cy;
+    // soft orbital skin + eyebrow
+    el('ellipse', {cx, cy:cy+6, rx:120, ry:82, fill:'#f8eee1'}, eyesSvg);
+    el('path', {d:`M ${cx-n*96} ${cy-54} Q ${cx-n*8} ${cy-86} ${cx+n*84} ${cy-62}`,
+                stroke:'#cfa985', 'stroke-width':7, fill:'none', 'stroke-linecap':'round'}, eyesSvg);
+    // palpebral fissure (almond): medial canthus toward the nose, lateral slightly higher
+    const lat = [cx - n*104, cy+3], med = [cx + n*100, cy+7];
+    const upper = `C ${cx-n*56} ${cy-52}, ${cx+n*38} ${cy-54}, ${med[0]} ${med[1]}`;
+    const fiss = `M ${lat[0]} ${lat[1]} ${upper} C ${cx+n*52} ${cy+40}, ${cx-n*48} ${cy+44}, ${lat[0]} ${lat[1]} Z`;
+    const cp = el('clipPath', {id:'fiss'+eye}, defs);
+    el('path', {d:fiss}, cp);
+    // sclera fills the fissure; iris moves BEHIND the lids (clipped)
+    el('path', {d:fiss, fill:'#ffffff'}, eyesSvg);
+    const wrap = el('g', {'clip-path':`url(#fiss${eye})`}, eyesSvg);
+    const g = el('g', {id:'iris'+eye}, wrap);
+    el('circle', {cx:0, cy:0, r:34, fill:'#7a5230', stroke:'#5d3d22', 'stroke-width':1.5}, g);
     // spokes make torsion visible (clock-face convention)
     for(let i=0;i<8;i++){
       const a = i*Math.PI/4;
-      el('line', {x1:16*Math.cos(a), y1:16*Math.sin(a), x2:28*Math.cos(a), y2:28*Math.sin(a),
-                  stroke:'#c9a06a', 'stroke-width':i===6?4:1.6}, g); // i=6 → 12-o'clock spoke, thicker marker
+      el('line', {x1:19*Math.cos(a), y1:19*Math.sin(a), x2:31*Math.cos(a), y2:31*Math.sin(a),
+                  stroke:'#c9a06a', 'stroke-width':i===6?4.5:1.8}, g); // i=6 → 12-o'clock spoke, thicker marker
     }
-    el('circle', {cx:0, cy:0, r:13, fill:'#141414'}, g);
+    el('circle', {cx:0, cy:0, r:14, fill:'#141414'}, g);
     el('path', {d:'M -5 -6 A 7 7 0 0 1 3 -8', fill:'none', stroke:'rgba(255,255,255,.75)', 'stroke-width':2.5, 'stroke-linecap':'round',
-                transform:'translate(-3,-2)'}, g);  // light reflex
+                transform:'translate(-4,-3)'}, g);  // light reflex
     irisGroups[eye] = g;
+    // upper-lid shadow on the globe
+    el('path', {d:`M ${lat[0]} ${lat[1]} ${upper}`, stroke:'rgba(90,60,40,.16)', 'stroke-width':10, fill:'none'}, wrap);
+    // lid margins, crease, caruncle at the medial canthus
+    el('path', {d:fiss, fill:'none', stroke:'#b98d6e', 'stroke-width':3, 'stroke-linejoin':'round'}, eyesSvg);
+    el('path', {d:`M ${cx-n*86} ${cy-44} Q ${cx-n*4} ${cy-70} ${cx+n*78} ${cy-48}`,
+                stroke:'#dbb896', 'stroke-width':2.5, fill:'none', 'stroke-linecap':'round'}, eyesSvg);
+    el('ellipse', {cx:med[0]-n*5, cy:med[1]-1, rx:6.5, ry:8.5, fill:'#e8a08e'}, eyesSvg);
     const cap = el('text', {x:E.cx, y:E.cy+116, 'text-anchor':'middle', 'font-size':12.5, 'font-weight':600, fill:'#5a6b7d'}, eyesSvg);
     cap.textContent = eye==='R' ? "Patient's RIGHT eye" : "Patient's LEFT eye";
     const tag = el('text', {x:E.cx, y:E.cy+134, 'text-anchor':'middle', 'font-size':10.5, fill:'#98a4b1', id:'eyetag'+eye}, eyesSvg);
     tag.textContent = '';
   }
   // central direction rose: fast (coral, thick) and slow (navy, thin) arrows + torsion arc
-  const defs = el('defs', {}, eyesSvg);
   for(const [id,color] of [['ahFast','#e2543a'],['ahSlow','#1c3a5e']]){
     const mk = el('marker', {id, viewBox:'0 0 10 10', refX:8, refY:5, markerWidth:5, markerHeight:5, orient:'auto-start-reverse'}, defs);
     el('path', {d:'M 0 0 L 10 5 L 0 10 z', fill:color}, mk);
