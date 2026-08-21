@@ -59,8 +59,18 @@
   .canalLabel{font-size:13px;font-weight:700;fill:var(--ink-soft);cursor:pointer}
   .canalLabel.sel{fill:var(--coral)}
 
+  .flowRow.dim button{opacity:.5}
+  /* H-pattern (anatomical actions vs clinical testing) arrows */
+  .hpArrow line{stroke:#8a94a0;stroke-width:2.2}
+  .hpArrow polygon{fill:#8a94a0}
+  .hpArrow.excited line{stroke:var(--coral);stroke-width:3.4}
+  .hpArrow.excited polygon{fill:var(--coral)}
+  .hpLbl{font-size:11px;font-weight:700;fill:var(--ink-soft)}
+  .hpLbl.excited{fill:var(--coral)}
   /* each muscle is a <g class="musGrp"> containing filled parts (.mFill: belly,
      insertion pad) and stroked parts (.mStroke: oblique tendon bands) */
+  .musGrp{cursor:pointer}
+  .mLabel{cursor:pointer}
   .musGrp .mFill{fill:var(--neutral-muscle);stroke:#9aa3ae;stroke-width:1.2;transition:fill .25s}
   .musGrp .mStroke{fill:none;stroke:var(--neutral-muscle);stroke-width:6;stroke-linecap:round;transition:stroke .25s}
   .musGrp.excited .mFill{fill:var(--coral);stroke:#b53c25}
@@ -143,6 +153,14 @@
          globe or under another muscle.</p>
       <svg id="orbitSvg" viewBox="0 0 640 372" aria-label="Orbits viewed from above"></svg>
     </div>
+    <details class="matrix" id="hpBox" open>
+      <summary>Anatomical actions vs clinical testing (H-pattern)</summary>
+      <p class="sub" style="margin-top:6px">Right eye, anterior view. A muscle's <b>anatomical action</b> (left) is its pull acting
+         alone; <b>clinical testing</b> (right) first turns the eye so one muscle's action is isolated:
+         SR/IR are tested in <b>AB</b>duction, SO/IO in <b>AD</b>duction. Click a muscle above to highlight
+         its arrows here.</p>
+      <svg id="hpSvg" viewBox="0 0 640 268" aria-label="Anatomical actions vs clinical testing"></svg>
+    </details>
   </section>
 
   <!-- ==================== ANIMATED EYES ==================== -->
@@ -205,6 +223,26 @@ const CANALS = {
         pair:{ipsi:'SO', contra:'IR'}, fast:{v:'up', t:'right'} },
 };
 const ANTAGONIST = { MR:'LR', LR:'MR', SR:'IR', IR:'SR', SO:'IO', IO:'SO' };
+
+/* Anatomical actions of each muscle acting alone (per the EOM tutorial +
+   standard teaching). h: adduct/abduct, v: up/down, t: 'in' (intorsion,
+   upper pole toward the nose) / 'ex' (extorsion). */
+const MUSCLE_ACTIONS = {
+  MR: { h:'adduct' },
+  LR: { h:'abduct' },
+  SR: { v:'up',   h:'adduct', t:'in' },
+  IR: { v:'down', h:'adduct', t:'ex' },
+  SO: { v:'down', h:'abduct', t:'in' },
+  IO: { v:'up',   h:'abduct', t:'ex' },
+};
+const MUSCLE_ACTION_TEXT = {
+  MR: { act:'pure ADduction (in)', why:'lies in the horizontal plane — with LR, the only pure horizontal movers', test:'look toward the nose' },
+  LR: { act:'pure ABduction (out)', why:'lies in the horizontal plane — with MR, the only pure horizontal movers', test:'look away from the nose' },
+  SR: { act:'elevation + adduction + INtorsion (up &amp; in)', why:'its muscle plane runs ~23° medial to the visual axis, so its pull is not purely vertical', test:'elevation is isolated with the eye ABducted (eye on the muscle-plane axis)' },
+  IR: { act:'depression + adduction + EXtorsion (down &amp; in)', why:'same 23° muscle plane as SR, pulling from below', test:'depression is isolated with the eye ABducted' },
+  SO: { act:'depression + ABduction + INtorsion (down &amp; out)', why:'its reflected tendon runs ~51° to the visual axis from the trochlea, attaching behind the equator', test:'depression is isolated with the eye ADducted' },
+  IO: { act:'elevation + ABduction + EXtorsion (up &amp; out)', why:'runs ~51° beneath the globe, attaching behind the equator', test:'elevation is isolated with the eye ADducted' },
+};
 const MUSCLE_NAMES = { MR:'Medial rectus (CN III)', LR:'Lateral rectus (CN VI)', SR:'Superior rectus (CN III)',
                        IR:'Inferior rectus (CN III)', SO:'Superior oblique (CN IV)', IO:'Inferior oblique (CN III)' };
 
@@ -222,7 +260,10 @@ const INHIB_NOTE = "Inhibitory responses are <b>weaker</b> than excitatory ones 
 /* ---------------------------------------------------------------------
    App state
 --------------------------------------------------------------------- */
-const state = { canal:'LP', flow:'fugal', mode:'teaching', paused:false, slowmo:false };
+/* selMuscle: null = canal mode; {eye:'L'|'R', m:'SO'} = single-muscle explore mode */
+const state = { canal:'LP', flow:'fugal', mode:'teaching', paused:false, slowmo:false, selMuscle:null };
+function selectMuscle(eye, m){ state.selMuscle = {eye, m}; render(); }
+function selectCanal(id){ state.selMuscle = null; if(id) state.canal = id; render(); }
 
 const $  = s => document.querySelector(s);
 const SVGNS = 'http://www.w3.org/2000/svg';
@@ -295,12 +336,12 @@ function buildHead(){
       const q = g.a0*Math.PI/180;
       el('circle', {cx:g.r*Math.cos(q), cy:g.r*Math.sin(q), r:7/g.fy*0.55, class:'ampulla', id:'amp'+id,
                     transform:`scale(1,1)`}, grp);
-      grp.addEventListener('click', ()=>{ state.canal=id; render(); });
+      grp.addEventListener('click', ()=>selectCanal(id));
       // label (NOT mirrored)
       const lx = lab.x + lab.m*(g.ox + g.lblDx), ly = lab.y + g.oy + g.lblDy;
       const t = el('text', {x:lx, y:ly, class:'canalLabel', id:'lbl'+id, 'text-anchor': lab.m===1?'start':'end'}, headSvg);
       t.textContent = k + 'C';
-      t.addEventListener('click', ()=>{ state.canal=id; render(); });
+      t.addEventListener('click', ()=>selectCanal(id));
     }
   }
   const n1 = el('text', {x:12, y:420, 'font-size':10.5, fill:'#98a4b1'}, headSvg);
@@ -326,7 +367,7 @@ function buildCanalButtons(){
       const b = document.createElement('button');
       b.id = 'btn'+id;
       b.textContent = {A:'Anterior',H:'Horizontal',P:'Posterior'}[k];
-      b.addEventListener('click', ()=>{ state.canal=id; render(); });
+      b.addEventListener('click', ()=>selectCanal(id));
       box.appendChild(b);
     }
   }
@@ -361,6 +402,7 @@ function buildMuscles(){
     const t = el('text', {x:lx, y:ly, 'text-anchor':'middle', class:'mLabel', id:`mlbl${E.eye}${m}`}, musclesSvg);
     t.textContent = m;
     const tip = el('title', {}, t); tip.textContent = MUSCLE_NAMES[m];
+    t.addEventListener('click', ()=>selectMuscle(E.eye, m));
   }
   for(const eye of ['R','L']){
     const E = EYES_M[eye]; E.eye = eye;
@@ -379,6 +421,7 @@ function buildMuscles(){
        equator (dashed where hidden). */
     {
       const g = el('g', {class:'musGrp', id:`mus${eye}SO`}, musclesSvg);
+      g.addEventListener('click', ()=>selectMuscle(eye, 'SO'));
       const tip = el('title', {}, g); tip.textContent = MUSCLE_NAMES.SO + ' — via the trochlea, reflected ~51° to the visual axis; passes under SR; inserts superotemporally BEHIND the equator';
       const T = [cx + n*40, cy - 52];                                // trochlea
       el('path', {d:`M ${cx+n*98} ${cy-44} Q ${cx+n*66} ${cy-54} ${T[0]} ${T[1]}`, class:'mStroke'}, g); // belly
@@ -399,6 +442,7 @@ function buildMuscles(){
        equator, near the macula (dashed where hidden). */
     {
       const g = el('g', {class:'musGrp', id:`mus${eye}IO`}, musclesSvg);
+      g.addEventListener('click', ()=>selectMuscle(eye, 'IO'));
       const tip = el('title', {}, g); tip.textContent = MUSCLE_NAMES.IO + ' — from the anteromedial orbital floor, ~51° to the visual axis; passes under IR; inserts inferotemporally BEHIND the equator, near the macula';
       const O = [cx + n*46, cy + 46];                                // inferonasal origin
       el('circle', {cx:O[0], cy:O[1], r:3.5, fill:'#8a94a0'}, g);
@@ -423,6 +467,7 @@ function buildMuscles(){
       const ang = muscleAngle(eye, m), a = q(ang);
       const rIns = 20 + TILLAUX_MM[m]*3.3;               // insertion distance from centre
       const g = el('g', {class:'musGrp', id:`mus${eye}${m}`}, musclesSvg);
+      g.addEventListener('click', ()=>selectMuscle(eye, m));
       const tip = el('title', {}, g);
       tip.textContent = `${MUSCLE_NAMES[m]} — inserts ${TILLAUX_MM[m]} mm from the limbus (spiral of Tillaux)` + (m==='SR' ? '; courses ~23° to the visual axis' : '');
       const bx = cx + 82*Math.cos(a), by = cy + 82*Math.sin(a);
@@ -462,6 +507,7 @@ function buildOrbits(){
     const t = el('text', {x, y, 'text-anchor':'middle', class:'mLabel', id:`olbl${eye}${m}`}, orbitSvg);
     t.textContent = m;
     const tip = el('title', {}, t); tip.textContent = MUSCLE_NAMES[m];
+    t.addEventListener('click', ()=>selectMuscle(eye, m));
   }
   for(const eye of ['L','R']){
     const {cx, n} = ORB[eye];
@@ -554,6 +600,69 @@ function buildOrbits(){
     const cap = el('text', {x:cx, y:368, 'text-anchor':'middle', 'font-size':12.5, 'font-weight':600, fill:'#5a6b7d'}, orbitSvg);
     cap.textContent = eye==='L' ? "Patient's LEFT orbit" : "Patient's RIGHT orbit";
   }
+  // clicking any muscle in this view also enters single-muscle mode
+  orbitSvg.querySelectorAll('g.musGrp').forEach(g=>{
+    const eye = g.id[3], m = g.id.slice(4);
+    g.addEventListener('click', ()=>selectMuscle(eye, m));
+  });
+}
+
+/* =====================================================================
+   2c. H-PATTERN — anatomical actions vs clinical testing (right eye,
+   anterior view, per the EOM tutorial's summary slide).
+   Anatomical: each muscle's pull acting alone (23°/51° geometry).
+   Clinical: SR/IR isolated in ABduction, SO/IO in ADduction.
+   ===================================================================== */
+const hpSvg = $('#hpSvg');
+function buildHPattern(){
+  function eyeGlyph(cx, cy){
+    el('circle', {cx, cy, r:44, fill:'#fdfdfd', stroke:'#aab4c0', 'stroke-width':2}, hpSvg);
+    el('circle', {cx, cy, r:17, fill:'#7a5230'}, hpSvg);
+    el('circle', {cx, cy, r:7.5, fill:'#1b1b1b'}, hpSvg);
+  }
+  function arrow(idBase, x1, y1, x2, y2){
+    const g = el('g', {class:'hpArrow', id:idBase}, hpSvg);
+    const dx = x2-x1, dy = y2-y1, L = Math.hypot(dx,dy), ux = dx/L, uy = dy/L;
+    const bx = x2-ux*9, by = y2-uy*9;                       // arrowhead base
+    el('line', {x1, y1, x2:bx, y2:by}, g);
+    el('polygon', {points:`${x2},${y2} ${bx-uy*4.5},${by+ux*4.5} ${bx+uy*4.5},${by-ux*4.5}`}, g);
+  }
+  function lbl(id, m, x, y){
+    const t = el('text', {x, y, 'text-anchor':'middle', class:'hpLbl', id}, hpSvg);
+    t.textContent = m;
+  }
+  // ---- left diagram: anatomical actions (right eye: temporal = viewer-left) ----
+  const A = {cx:163, cy:118};
+  eyeGlyph(A.cx, A.cy);
+  const DIRS = { LR:[-1,0], MR:[1,0], SR:[0.707,-0.707], IO:[-0.707,-0.707], IR:[0.707,0.707], SO:[-0.707,0.707] };
+  for(const m in DIRS){
+    const [ux,uy] = DIRS[m];
+    arrow('hpA'+m, A.cx+ux*24, A.cy+uy*24, A.cx+ux*84, A.cy+uy*84);
+    lbl('hpAl'+m, m, A.cx+ux*99, A.cy+uy*99+4);
+  }
+  let t = el('text', {x:A.cx, y:238, 'text-anchor':'middle', 'font-size':13, 'font-weight':700, fill:'#e2543a'}, hpSvg);
+  t.textContent = 'Anatomical actions';
+  t = el('text', {x:A.cx, y:255, 'text-anchor':'middle', 'font-size':10.5, fill:'#98a4b1'}, hpSvg);
+  t.textContent = "patient's right eye — anterior view (temporal on your left)";
+  // ---- right diagram: clinical testing (H-pattern) ----
+  const C = {cx:473, cy:118};
+  eyeGlyph(C.cx, C.cy);
+  arrow('hpCLR', C.cx-24, C.cy, C.cx-108, C.cy);            // abduct
+  arrow('hpCMR', C.cx+24, C.cy, C.cx+108, C.cy);            // adduct
+  lbl('hpClLR', 'LR', C.cx-122, C.cy+4);
+  lbl('hpClMR', 'MR', C.cx+122, C.cy+4);
+  arrow('hpCSR', C.cx-70, C.cy-12, C.cx-70, C.cy-70);       // temporal (ABducted): SR up
+  arrow('hpCIR', C.cx-70, C.cy+12, C.cx-70, C.cy+70);       //                      IR down
+  lbl('hpClSR', 'SR', C.cx-70, C.cy-80);
+  lbl('hpClIR', 'IR', C.cx-70, C.cy+92);
+  arrow('hpCIO', C.cx+70, C.cy-12, C.cx+70, C.cy-70);       // nasal (ADducted): IO up
+  arrow('hpCSO', C.cx+70, C.cy+12, C.cx+70, C.cy+70);       //                   SO down
+  lbl('hpClIO', 'IO', C.cx+70, C.cy-80);
+  lbl('hpClSO', 'SO', C.cx+70, C.cy+92);
+  t = el('text', {x:C.cx, y:238, 'text-anchor':'middle', 'font-size':13, 'font-weight':700, fill:'#1c3a5e'}, hpSvg);
+  t.textContent = 'Clinical testing';
+  t = el('text', {x:C.cx, y:255, 'text-anchor':'middle', 'font-size':10.5, fill:'#98a4b1'}, hpSvg);
+  t.textContent = 'SR/IR tested in ABduction · SO/IO in ADduction · LR₆SO₄R₃';
 }
 
 /* =====================================================================
@@ -635,6 +744,24 @@ function tick(ts){
   let s;
   if(ph < SLOW_FRAC) s = 0.5 - ph/SLOW_FRAC;
   else               s = -0.5 + (ph-SLOW_FRAC)/(1-SLOW_FRAC);
+  if(state.selMuscle){
+    /* single-muscle mode: the acting eye performs a smooth contract–relax
+       duction along the muscle's action vector; the other eye rests */
+    const mv = actionVector();
+    const T2 = 2.4;
+    const s2 = 0.5 - 0.5*Math.cos(2*Math.PI*((simTime % T2)/T2));   // 0→1→0
+    for(const eye of ['R','L']){
+      const E = EYES_A[eye];
+      if(eye===mv.eye){
+        irisGroups[eye].setAttribute('transform',
+          `translate(${E.cx + mv.fx*s2*22},${E.cy + mv.fy*s2*22}) rotate(${mv.ft*s2*16})`);
+      } else {
+        irisGroups[eye].setAttribute('transform', `translate(${E.cx},${E.cy})`);
+      }
+    }
+    requestAnimationFrame(tick);
+    return;
+  }
   const v = nystagmusVector();
   for(const eye of ['R','L']){
     /* In vertical-canal BPPV the torsional component dominates in the eye on the
@@ -738,14 +865,61 @@ function updateRose(v){
   $('#roseLbl2').textContent = v.ft!==0 ? 'curved arrow = torsional fast phase (upper poles)' : '';
 }
 
+/* ---- single-muscle explore mode: caption + rose ---- */
+function updateMuscleCaption(mv){
+  const side = mv.eye==='L' ? 'left' : 'right';
+  const info = MUSCLE_ACTION_TEXT[mv.m];
+  if(state.mode==='teaching'){
+    $('#caption').innerHTML =
+      `<b>Single-muscle action — ${MUSCLE_NAMES[mv.m]}, ${side} eye.</b><br>` +
+      `Acting alone: <b>${info.act}</b> — ${info.why}.<br>` +
+      `<b>Bedside:</b> ${info.test}. Its antagonist (${ANTAGONIST[mv.m]}) relaxes (Sherrington's law). ` +
+      `Click a canal to return to nystagmus mode.`;
+  } else {
+    $('#caption').innerHTML =
+      `This is one eye muscle — the <b>${MUSCLE_NAMES[mv.m].replace(/ \(CN.*\)/,'')}</b> of the ${side} eye. ` +
+      `Watch how it pulls the eye when it tightens. Tap a canal on the left panel to go back to the dizziness view.`;
+  }
+  $('#clinNote').style.display = 'none';
+  $('#beatLabel').textContent = state.mode==='teaching' ? 'single-muscle demonstration' : '';
+}
+function updateRoseMuscle(mv){
+  const L = 40;
+  const hasLin = (mv.fx!==0 || mv.fy!==0);
+  $('#fastArrow').setAttribute('x2', (mv.fx*L).toFixed(1));
+  $('#fastArrow').setAttribute('y2', (mv.fy*L).toFixed(1));
+  $('#fastArrow').style.display = hasLin ? '' : 'none';
+  $('#slowArrow').style.display = 'none';
+  if(mv.ft!==0){
+    $('#torArc').setAttribute('d', mv.ft>0 ? 'M -34 -42 A 54 54 0 0 1 34 -42' : 'M 34 -42 A 54 54 0 0 0 -34 -42');
+    $('#torArc').style.display = '';
+  } else $('#torArc').style.display = 'none';
+  $('#roseLbl').textContent = 'coral = direction of pull';
+  $('#roseLbl2').textContent = mv.ft!==0 ? 'curved arrow = torsion (upper pole)' : '';
+}
+
 /* ---------------------------------------------------------------------
    Master render — reflects `state` into every panel
 --------------------------------------------------------------------- */
+/* Screen-space action vector for the selected single muscle (examiner view). */
+function actionVector(){
+  const {eye, m} = state.selMuscle;
+  const act = MUSCLE_ACTIONS[m];
+  const nasal = eye==='R' ? +1 : -1;       // screen +x toward the nose for that eye
+  let fx=0, fy=0, ft=0;
+  if(act.h) fx = (act.h==='adduct' ? nasal : -nasal);
+  if(act.v) fy = (act.v==='up' ? -1 : +1);
+  if(act.t) ft = (act.t==='in' ? nasal : -nasal);   // intorsion: upper pole toward the nose
+  const L = Math.hypot(fx,fy) || 1;
+  return { eye, m, fx:fx/L, fy:fy/L, ft };
+}
+
 function render(){
   const c = CANALS[state.canal];
-  // canal buttons + svg highlighting
+  const muscleMode = !!state.selMuscle;
+  // canal buttons + svg highlighting (no canal selected while exploring a muscle)
   for(const id in CANALS){
-    const sel = id===state.canal;
+    const sel = id===state.canal && !muscleMode;
     $('#btn'+id).classList.toggle('sel', sel);
     $('#tube'+id).classList.toggle('sel', sel);
     $('#amp'+id).classList.toggle('sel', sel);
@@ -768,7 +942,10 @@ function render(){
     lbl.setAttribute('text-anchor', left ? 'end' : 'start');
     ptr.setAttribute('x1', ax); ptr.setAttribute('y1', ay - 5);
     ptr.setAttribute('x2', lx + (left ? 2 : -2)); ptr.setAttribute('y2', ly);
+    lbl.style.display = muscleMode ? 'none' : '';
+    ptr.style.display = muscleMode ? 'none' : '';
   }
+  $('#flowRow').classList.toggle('dim', muscleMode);
   // flow buttons + excitatory/inhibitory tags for THIS canal
   document.querySelectorAll('#flowRow button').forEach(b=>{
     b.classList.toggle('sel', b.dataset.flow===state.flow);
@@ -780,7 +957,14 @@ function render(){
   $('#tagFugal').className = 'tag ' + (petalExc?'inh':'exc');
 
   // muscles — front view (mus/mlbl) and orbital view (orb/olbl) together
-  const {act, inh} = muscleSets();
+  let act, inh;
+  if(muscleMode){
+    const {eye, m} = state.selMuscle;
+    act = [[eye, m]];
+    inh = [[eye, ANTAGONIST[m]]];
+  } else {
+    ({act, inh} = muscleSets());
+  }
   for(const eye of ['R','L']) for(const m of ['MR','LR','SR','IR','SO','IO']){
     const isAct = act.some(([e,mm])=>e===eye&&mm===m);
     const isInh = inh.some(([e,mm])=>e===eye&&mm===m);
@@ -792,17 +976,37 @@ function render(){
       if(isInh) node.classList.add('inhibited');
     }
   }
-  // eye tags: which eye shows torsion vs vertical best (teaching nicety)
-  const vertical = c.type==='vertical';
-  for(const eye of ['R','L']){
-    const ipsi = (c.side===eye);
-    $('#eyetag'+eye).textContent = (vertical && state.mode==='teaching')
-      ? (ipsi ? 'torsion dominates (ipsilateral)' : 'vertical dominates (contralateral)') : '';
+  // H-pattern arrows: highlight the explored muscle
+  const selM = muscleMode ? state.selMuscle.m : null;
+  for(const m of ['MR','LR','SR','IR','SO','IO'])
+    for(const id of ['hpA'+m, 'hpC'+m, 'hpAl'+m, 'hpCl'+m]){
+      const node = document.getElementById(id);
+      if(node) node.classList.toggle('excited', m===selM);
+    }
+
+  // eye tags
+  if(muscleMode){
+    for(const eye of ['R','L'])
+      $('#eyetag'+eye).textContent =
+        (eye===state.selMuscle.eye && state.mode==='teaching') ? 'acting eye' : '';
+  } else {
+    const vertical = c.type==='vertical';
+    for(const eye of ['R','L']){
+      const ipsi = (c.side===eye);
+      $('#eyetag'+eye).textContent = (vertical && state.mode==='teaching')
+        ? (ipsi ? 'torsion dominates (ipsilateral)' : 'vertical dominates (contralateral)') : '';
+    }
   }
 
-  const v = nystagmusVector();
-  updateCaption(v);
-  updateRose(v);
+  if(muscleMode){
+    const mv = actionVector();
+    updateMuscleCaption(mv);
+    updateRoseMuscle(mv);
+  } else {
+    const v = nystagmusVector();
+    updateCaption(v);
+    updateRose(v);
+  }
 
   // teaching-only elements
   const teach = state.mode==='teaching';
@@ -810,9 +1014,10 @@ function render(){
   $('#modePatient').classList.toggle('on', !teach);
   $('#matrixBox').classList.toggle('patientHidden', !teach);
   $('#orbitBox').classList.toggle('patientHidden', !teach);
+  $('#hpBox').classList.toggle('patientHidden', !teach);
   $('#musclesSub').textContent = teach
-    ? 'Excited muscles glow coral; antagonists (inhibited) turn blue. Recti insert anterior to the equator at graded distances from the limbus (spiral of Tillaux — hover a muscle for mm). Obliques insert on the temporal quadrants BEHIND the equator (dashed = hidden); SO reflects through the trochlea and passes under SR; IO passes under IR.'
-    : 'The glowing muscles are the ones pulling the eyes; the blue ones are relaxing.';
+    ? 'Click any muscle to see its individual action; click a canal to return. Excited muscles glow coral; antagonists (inhibited) turn blue. Recti insert anterior to the equator at graded distances from the limbus (spiral of Tillaux — hover a muscle for mm and nerve). Obliques insert on the temporal quadrants BEHIND the equator (dashed = hidden); SO reflects through the trochlea and passes under SR; IO passes under IR.'
+    : 'The glowing muscles are the ones pulling the eyes; the blue ones are relaxing. Tap a muscle to see what it alone does.';
   document.querySelectorAll('.mLabel').forEach(t=>t.style.display = teach ? '' : 'none');
 }
 
@@ -842,10 +1047,11 @@ buildHead();
 buildCanalButtons();
 buildMuscles();
 buildOrbits();
+buildHPattern();
 buildEyes();
 buildMatrix();
 document.querySelectorAll('#flowRow button').forEach(b=>
-  b.addEventListener('click', ()=>{ state.flow=b.dataset.flow; render(); }));
+  b.addEventListener('click', ()=>{ state.flow=b.dataset.flow; selectCanal(null); }));
 $('#modeTeach').addEventListener('click', ()=>{ state.mode='teaching'; render(); });
 $('#modePatient').addEventListener('click', ()=>{ state.mode='patient'; render(); });
 $('#btnPause').addEventListener('click', ()=>{ state.paused=!state.paused; $('#btnPause').classList.toggle('on', state.paused); $('#btnPause').textContent = state.paused?'▶ Resume':'⏸ Pause'; });
