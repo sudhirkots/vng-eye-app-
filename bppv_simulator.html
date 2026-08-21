@@ -74,6 +74,7 @@
   .mLabel.excited{fill:var(--coral)}
   .mLabel.inhibited{fill:var(--blue-inhib)}
 
+  .orbHead{margin:14px 0 2px;color:var(--navy);font-size:.95rem;font-weight:600}
   .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:.78rem;color:var(--ink-soft);margin-top:8px}
   .legend .sw{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-2px;margin-right:5px}
 
@@ -133,6 +134,14 @@
       <span><span class="sw" style="background:var(--coral)"></span>Excited / contracting</span>
       <span><span class="sw" style="background:var(--blue-inhib)"></span>Inhibited / relaxing</span>
       <span><span class="sw" style="background:var(--neutral-muscle)"></span>Not driven by this canal</span>
+    </div>
+    <div id="orbitBox">
+      <h3 class="orbHead">Muscle courses — orbits viewed from above</h3>
+      <p class="sub">Same orientation as the canal diagram (patient's LEFT on your left). The rectus muscle
+         plane sits ~23° from the optical axis; the oblique tendons run ~51° to it — this is why SR/IR are
+         not pure vertical movers and why the obliques are the chief torters. Dashed = passes beneath the
+         globe or under another muscle.</p>
+      <svg id="orbitSvg" viewBox="0 0 640 372" aria-label="Orbits viewed from above"></svg>
     </div>
   </section>
 
@@ -431,6 +440,123 @@ function buildMuscles(){
 }
 
 /* =====================================================================
+   2b. ORBITAL VIEW — both orbits seen from ABOVE (per the reference
+   orbital-anatomy figure). Same orientation as the canal schematic:
+   anterior up, patient's LEFT orbit on the viewer's left.
+   Shows the muscle courses: recti from the annulus at the apex, the
+   rectus muscle plane ~23° from the optical axis, SO reflected through
+   the trochlea (~51°) passing UNDER SR to a posterotemporal insertion,
+   IO sweeping beneath the globe to insert posterolaterally.
+   Muscles share the excitation highlighting via ids orb<eye><muscle>.
+   ===================================================================== */
+const orbitSvg = $('#orbitSvg');
+function buildOrbits(){
+  const q = d => d*Math.PI/180;
+  const ORB = { L:{cx:160, n:+1}, R:{cx:480, n:-1} };   // n = +x toward the midline (nasal)
+  // midline nose marker (anterior, between the orbits)
+  el('path', {d:'M 306 74 L 320 46 L 334 74', fill:'#faf5ef', stroke:'#c9bfae', 'stroke-width':2, 'stroke-linejoin':'round'}, orbitSvg);
+  const nl = el('text', {x:320, y:92, 'text-anchor':'middle', 'font-size':10.5, fill:'#8a7a63'}, orbitSvg); nl.textContent = 'nose';
+  const hd = el('text', {x:320, y:16, 'text-anchor':'middle', 'font-size':12, fill:'#98a4b1'}, orbitSvg);
+  hd.textContent = 'Viewed from above — anterior up; annotations shown on the right orbit';
+  function olbl(eye, m, x, y){
+    const t = el('text', {x, y, 'text-anchor':'middle', class:'mLabel', id:`olbl${eye}${m}`}, orbitSvg);
+    t.textContent = m;
+    const tip = el('title', {}, t); tip.textContent = MUSCLE_NAMES[m];
+  }
+  for(const eye of ['L','R']){
+    const {cx, n} = ORB[eye];
+    const gy = 138, r = 48;                              // globe centre/radius
+    const apex = [cx + n*78, 356];                       // orbital apex (posteromedial)
+    // bony orbital walls
+    el('path', {d:`M ${cx+n*64} 72 Q ${cx+n*86} 210 ${apex[0]} ${apex[1]}`, stroke:'#dcd2bf', 'stroke-width':10, fill:'none', 'stroke-linecap':'round'}, orbitSvg);
+    el('path', {d:`M ${cx-n*80} 96 Q ${cx-n*94} 230 ${apex[0]-n*8} ${apex[1]}`, stroke:'#dcd2bf', 'stroke-width':10, fill:'none', 'stroke-linecap':'round'}, orbitSvg);
+    // globe + cornea (anterior pole up)
+    el('circle', {cx, cy:gy, r, fill:'#fdfdfd', stroke:'#aab4c0', 'stroke-width':2}, orbitSvg);
+    el('path', {d:`M ${cx-19} ${gy-r+4} Q ${cx} ${gy-r-14} ${cx+19} ${gy-r+4}`, fill:'#cfe2f0', stroke:'#8fb0c9', 'stroke-width':1.5}, orbitSvg); // cornea
+    // optical axis + muscle plane + angle (annotated on the RIGHT orbit only)
+    if(eye==='R'){
+      el('line', {x1:cx, y1:64, x2:cx, y2:256, stroke:'#4a5560', 'stroke-width':1.4}, orbitSvg);
+      // muscle plane: through globe centre toward the apex, 23° medial to the axis
+      const dx = n*Math.sin(q(23)), dy = Math.cos(q(23));
+      el('line', {x1:cx - dx*80, y1:gy - dy*80, x2:cx + dx*228, y2:gy + dy*228, stroke:'#4a5560', 'stroke-width':1.4, 'stroke-dasharray':'7 4'}, orbitSvg);
+      const t1 = el('text', {x:cx-8, y:60, 'text-anchor':'end', 'font-size':10, fill:'#4a5560'}, orbitSvg); t1.textContent = 'optical axis';
+      const t2 = el('text', {x:cx - dx*80 - n*4, y:gy - dy*80 - 6, 'text-anchor':'start', 'font-size':10, fill:'#4a5560'}, orbitSvg); t2.textContent = 'muscle plane';
+      el('path', {d:`M ${cx} ${gy-64} A 64 64 0 0 ${n>0?1:0} ${cx - dx*64} ${gy - dy*64}`, fill:'none', stroke:'#e2543a', 'stroke-width':1.4}, orbitSvg);
+      const t3 = el('text', {x:cx - n*15, y:gy-70, 'text-anchor':'middle', 'font-size':11, 'font-weight':700, fill:'#e2543a'}, orbitSvg); t3.textContent = '23°';
+    }
+    /* ---- muscles, painted in depth order (deepest first) ---- */
+    // IO — from the anteromedial orbital floor, beneath the globe, to a
+    // posterolateral insertion (dashed = below the globe)
+    {
+      const g = el('g', {class:'musGrp', id:`orb${eye}IO`}, orbitSvg);
+      const tip = el('title', {}, g); tip.textContent = MUSCLE_NAMES.IO + ' — runs beneath the globe (~51° to the optical axis); inserts posterolaterally near the macula';
+      const O = [cx + n*46, 96];
+      el('circle', {cx:O[0], cy:O[1], r:3.5, fill:'#8a94a0'}, g);
+      const I = [cx - n*30, gy + 26];
+      el('path', {d:`M ${O[0]} ${O[1]} Q ${cx} ${gy+40} ${I[0]} ${I[1]}`, class:'mStroke', 'stroke-dasharray':'4 5', style:'stroke-width:5'}, g);
+      el('rect', {x:I[0]-8, y:I[1]-2.5, width:16, height:5, rx:2.5, class:'mFill', transform:`rotate(${n*50} ${I[0]} ${I[1]})`}, g);
+      olbl(eye, 'IO', cx - n*58, gy + 44);
+    }
+    // IR — beneath SR/globe in this view (dashed), same plane as SR
+    {
+      const g = el('g', {class:'musGrp', id:`orb${eye}IR`}, orbitSvg);
+      const tip = el('title', {}, g); tip.textContent = MUSCLE_NAMES.IR + ' — courses under the globe in the muscle plane (~23°); hidden in this view';
+      el('path', {d:`M ${apex[0]-n*2} ${apex[1]-6} Q ${cx+n*40} 216 ${cx+n*8} ${gy-30}`, class:'mStroke', 'stroke-dasharray':'4 5', style:'stroke-width:6'}, g);
+      olbl(eye, 'IR', cx - n*8, 340);
+    }
+    // MR — along the medial wall to an anteromedial insertion
+    {
+      const g = el('g', {class:'musGrp', id:`orb${eye}MR`}, orbitSvg);
+      const tip = el('title', {}, g); tip.textContent = MUSCLE_NAMES.MR;
+      const I = [cx + n*30, gy - 38];
+      el('path', {d:`M ${apex[0]} ${apex[1]-8} Q ${cx+n*62} 200 ${I[0]} ${I[1]}`, class:'mStroke', style:'stroke-width:11'}, g);
+      el('rect', {x:I[0]-9, y:I[1]-2.5, width:18, height:5, rx:2.5, class:'mFill', transform:`rotate(${-n*38} ${I[0]} ${I[1]})`}, g);
+      olbl(eye, 'MR', cx + n*74, 132);
+    }
+    // LR — along the lateral wall to an anterotemporal insertion
+    {
+      const g = el('g', {class:'musGrp', id:`orb${eye}LR`}, orbitSvg);
+      const tip = el('title', {}, g); tip.textContent = MUSCLE_NAMES.LR;
+      const I = [cx - n*30, gy - 38];
+      el('path', {d:`M ${apex[0]-n*10} ${apex[1]-8} Q ${cx-n*68} 210 ${I[0]} ${I[1]}`, class:'mStroke', style:'stroke-width:11'}, g);
+      el('rect', {x:I[0]-9, y:I[1]-2.5, width:18, height:5, rx:2.5, class:'mFill', transform:`rotate(${n*38} ${I[0]} ${I[1]})`}, g);
+      olbl(eye, 'LR', cx - n*84, 150);
+    }
+    // SO — along the medial wall above MR to the trochlea, then reflected
+    // (~51°) posterolaterally UNDER SR to insert behind the equator
+    {
+      const g = el('g', {class:'musGrp', id:`orb${eye}SO`}, orbitSvg);
+      const tip = el('title', {}, g); tip.textContent = MUSCLE_NAMES.SO + ' — reflected through the trochlea ~51° to the optical axis; passes under SR; inserts posterotemporally behind the equator';
+      const T = [cx + n*52, 80];
+      el('path', {d:`M ${apex[0]+n*6} ${apex[1]-4} Q ${cx+n*74} 170 ${T[0]} ${T[1]}`, class:'mStroke', style:'stroke-width:7'}, g);
+      el('circle', {cx:T[0], cy:T[1], r:5, fill:'none', stroke:'#8a94a0', 'stroke-width':2.2}, g);   // trochlea
+      const mid = [cx + n*14, 104];
+      el('path', {d:`M ${T[0]} ${T[1]} L ${mid[0]} ${mid[1]}`, class:'mStroke', style:'stroke-width:6'}, g);
+      const I = [cx - n*26, gy + 18];
+      el('path', {d:`M ${mid[0]} ${mid[1]} Q ${cx-n*8} ${gy-4} ${I[0]} ${I[1]}`, class:'mStroke', 'stroke-dasharray':'4 5', style:'stroke-width:4'}, g); // under SR / behind equator
+      el('rect', {x:I[0]-8, y:I[1]-2.5, width:16, height:5, rx:2.5, class:'mFill', transform:`rotate(${-n*45} ${I[0]} ${I[1]})`}, g);
+      if(eye==='R'){
+        const t4 = el('text', {x:cx - n*30, y:92, 'text-anchor':'middle', 'font-size':10.5, 'font-weight':700, fill:'#e2543a'}, orbitSvg);
+        t4.textContent = '≈51°';
+      }
+      olbl(eye, 'SO', cx + n*82, 66);
+    }
+    // SR — forward in the muscle plane (23° medial to the optical axis),
+    // over the globe, inserting anteriorly; drawn last = on top
+    {
+      const g = el('g', {class:'musGrp', id:`orb${eye}SR`}, orbitSvg);
+      const tip = el('title', {}, g); tip.textContent = MUSCLE_NAMES.SR + ' — courses ~23° to the optical axis; inserts 7.7 mm from the limbus';
+      const I = [cx - n*4, gy - 46];
+      el('path', {d:`M ${apex[0]-n*4} ${apex[1]-8} Q ${cx+n*36} 212 ${I[0]} ${I[1]}`, class:'mStroke', style:'stroke-width:13'}, g);
+      el('rect', {x:I[0]-9, y:I[1]-2.5, width:18, height:5, rx:2.5, class:'mFill', transform:`rotate(${-n*6} ${I[0]} ${I[1]})`}, g);
+      olbl(eye, 'SR', cx + n*40, 262);
+    }
+    const cap = el('text', {x:cx, y:368, 'text-anchor':'middle', 'font-size':12.5, 'font-weight':600, fill:'#5a6b7d'}, orbitSvg);
+    cap.textContent = eye==='L' ? "Patient's LEFT orbit" : "Patient's RIGHT orbit";
+  }
+}
+
+/* =====================================================================
    3. ANIMATED EYES — examiner's view.
    Screen mapping (patient frame → screen): patient's LEFT = screen RIGHT.
      fast.h 'left'  → +x   |  'right' → −x
@@ -653,13 +779,18 @@ function render(){
   $('#tagFugal').textContent = petalExc ? 'inhibitory' : 'excitatory';
   $('#tagFugal').className = 'tag ' + (petalExc?'inh':'exc');
 
-  // muscles
+  // muscles — front view (mus/mlbl) and orbital view (orb/olbl) together
   const {act, inh} = muscleSets();
   for(const eye of ['R','L']) for(const m of ['MR','LR','SR','IR','SO','IO']){
-    const mus = $(`#mus${eye}${m}`), lbl = $(`#mlbl${eye}${m}`);
-    mus.classList.remove('excited','inhibited'); lbl.classList.remove('excited','inhibited');
-    if(act.some(([e,mm])=>e===eye&&mm===m)){ mus.classList.add('excited');  lbl.classList.add('excited'); }
-    if(inh.some(([e,mm])=>e===eye&&mm===m)){ mus.classList.add('inhibited');lbl.classList.add('inhibited'); }
+    const isAct = act.some(([e,mm])=>e===eye&&mm===m);
+    const isInh = inh.some(([e,mm])=>e===eye&&mm===m);
+    for(const id of [`mus${eye}${m}`, `mlbl${eye}${m}`, `orb${eye}${m}`, `olbl${eye}${m}`]){
+      const node = document.getElementById(id);
+      if(!node) continue;
+      node.classList.remove('excited','inhibited');
+      if(isAct) node.classList.add('excited');
+      if(isInh) node.classList.add('inhibited');
+    }
   }
   // eye tags: which eye shows torsion vs vertical best (teaching nicety)
   const vertical = c.type==='vertical';
@@ -678,6 +809,7 @@ function render(){
   $('#modeTeach').classList.toggle('on', teach);
   $('#modePatient').classList.toggle('on', !teach);
   $('#matrixBox').classList.toggle('patientHidden', !teach);
+  $('#orbitBox').classList.toggle('patientHidden', !teach);
   $('#musclesSub').textContent = teach
     ? 'Excited muscles glow coral; antagonists (inhibited) turn blue. Recti insert anterior to the equator at graded distances from the limbus (spiral of Tillaux — hover a muscle for mm). Obliques insert on the temporal quadrants BEHIND the equator (dashed = hidden); SO reflects through the trochlea and passes under SR; IO passes under IR.'
     : 'The glowing muscles are the ones pulling the eyes; the blue ones are relaxing.';
@@ -708,6 +840,7 @@ function buildMatrix(){
 buildHead();
 buildCanalButtons();
 buildMuscles();
+buildOrbits();
 buildEyes();
 buildMatrix();
 document.querySelectorAll('#flowRow button').forEach(b=>
