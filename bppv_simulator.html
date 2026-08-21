@@ -362,26 +362,15 @@ function buildMuscles(){
     const cap = el('text', {x:cx, y:cy+134, 'text-anchor':'middle', 'font-size':13, 'font-weight':600, fill:'#5a6b7d'}, musclesSvg);
     cap.textContent = eye==='R' ? "Patient's RIGHT eye" : "Patient's LEFT eye";
 
-    /* Four recti: belly spindle whose tip reaches the globe, plus a tangential
-       insertion pad ON the globe edge (recti insert anterior to the equator). */
-    for(const m of ['MR','LR','SR','IR']){
-      const ang = muscleAngle(eye, m), a = q(ang);
-      const g = el('g', {class:'musGrp', id:`mus${eye}${m}`}, musclesSvg);
-      const tip = el('title', {}, g); tip.textContent = MUSCLE_NAMES[m];
-      const bx = cx + 82*Math.cos(a), by = cy + 82*Math.sin(a);
-      el('ellipse', {cx:bx, cy:by, rx:28, ry:9, class:'mFill',
-                     transform:`rotate(${ang} ${bx} ${by})`}, g);
-      const px = cx + 49*Math.cos(a), py = cy + 49*Math.sin(a);
-      el('rect', {x:px-10, y:py-3, width:20, height:6, rx:3, class:'mFill',
-                  transform:`rotate(${ang+90} ${px} ${py})`}, g);   // insertion on the globe
-      addLabel(E, m, cx + 118*Math.cos(a), cy + 118*Math.sin(a) + 4);
-    }
+    /* Obliques are drawn FIRST so the recti render on top of them:
+       the SO tendon passes UNDER the SR, and the IO passes UNDER the IR. */
 
-    /* SO: belly → trochlea (superonasal) → tendon reflected over the globe →
-       inserts on the SUPEROTEMPORAL quadrant (dashed where it passes behind). */
+    /* SO: belly → trochlea (superonasal) → tendon reflected back at ~51°,
+       passes UNDER SR, inserts on the SUPEROTEMPORAL quadrant BEHIND the
+       equator (dashed where hidden). */
     {
       const g = el('g', {class:'musGrp', id:`mus${eye}SO`}, musclesSvg);
-      const tip = el('title', {}, g); tip.textContent = MUSCLE_NAMES.SO + ' (via trochlea; inserts superotemporally, behind the equator)';
+      const tip = el('title', {}, g); tip.textContent = MUSCLE_NAMES.SO + ' — via the trochlea, reflected ~51° to the visual axis; passes under SR; inserts superotemporally BEHIND the equator';
       const T = [cx + n*40, cy - 52];                                // trochlea
       el('path', {d:`M ${cx+n*98} ${cy-44} Q ${cx+n*66} ${cy-54} ${T[0]} ${T[1]}`, class:'mStroke'}, g); // belly
       el('circle', {cx:T[0], cy:T[1], r:5, fill:'none', stroke:'#8a94a0', 'stroke-width':2.2}, g);       // trochlea ring
@@ -396,11 +385,12 @@ function buildMuscles(){
       addLabel(E, 'SO', cx + n*84, cy - 72);
     }
 
-    /* IO: origin at the inferonasal orbital rim → passes under the globe →
-       inserts on the INFEROTEMPORAL quadrant (dashed where behind). */
+    /* IO: origin at the anteromedial orbital floor → runs ~51° UNDER the IR
+       and the globe → inserts on the INFEROTEMPORAL quadrant BEHIND the
+       equator, near the macula (dashed where hidden). */
     {
       const g = el('g', {class:'musGrp', id:`mus${eye}IO`}, musclesSvg);
-      const tip = el('title', {}, g); tip.textContent = MUSCLE_NAMES.IO + ' (inserts inferotemporally, behind the equator)';
+      const tip = el('title', {}, g); tip.textContent = MUSCLE_NAMES.IO + ' — from the anteromedial orbital floor, ~51° to the visual axis; passes under IR; inserts inferotemporally BEHIND the equator, near the macula';
       const O = [cx + n*46, cy + 46];                                // inferonasal origin
       el('circle', {cx:O[0], cy:O[1], r:3.5, fill:'#8a94a0'}, g);
       const E2 = [cx - n*8, cy + 55];
@@ -412,6 +402,28 @@ function buildMuscles(){
       el('rect', {x:P2[0]-8, y:P2[1]-2.5, width:16, height:5, rx:2.5, class:'mFill',
                   transform:`rotate(${a2+90} ${P2[0]} ${P2[1]})`}, g);                                   // insertion
       addLabel(E, 'IO', cx + n*84, cy + 80);
+    }
+
+    /* Four recti (drawn on top): the belly reaches the globe edge and the
+       tendon wraps onto the FRONT of the globe, inserting anterior to the
+       equator at graded distances from the limbus — the SPIRAL OF TILLAUX
+       (MR 5.5 mm < IR 6.5 mm < LR 6.9 mm < SR 7.7 mm).
+       Scale: iris/limbus r=20px ≈ 6 mm → ~3.3 px/mm. */
+    const TILLAUX_MM = { MR:5.5, IR:6.5, LR:6.9, SR:7.7 };
+    for(const m of ['MR','LR','SR','IR']){
+      const ang = muscleAngle(eye, m), a = q(ang);
+      const rIns = 20 + TILLAUX_MM[m]*3.3;               // insertion distance from centre
+      const g = el('g', {class:'musGrp', id:`mus${eye}${m}`}, musclesSvg);
+      const tip = el('title', {}, g);
+      tip.textContent = `${MUSCLE_NAMES[m]} — inserts ${TILLAUX_MM[m]} mm from the limbus (spiral of Tillaux)` + (m==='SR' ? '; courses ~23° to the visual axis' : '');
+      const bx = cx + 82*Math.cos(a), by = cy + 82*Math.sin(a);
+      el('ellipse', {cx:bx, cy:by, rx:28, ry:9, class:'mFill',
+                     transform:`rotate(${ang} ${bx} ${by})`}, g);   // belly
+      el('rect', {x:cx+rIns, y:cy-6.5, width:55-rIns, height:13, rx:3, class:'mFill',
+                  transform:`rotate(${ang} ${cx} ${cy})`}, g);      // tendon wrapping onto the front of the globe
+      el('rect', {x:cx+rIns-1.5, y:cy-9, width:3, height:18, rx:1.5, class:'mFill',
+                  transform:`rotate(${ang} ${cx} ${cy})`}, g);      // insertion line
+      addLabel(E, m, cx + 118*Math.cos(a), cy + 118*Math.sin(a) + 4);
     }
   }
   const hdr = el('text', {x:320, y:20, 'text-anchor':'middle', 'font-size':12, fill:'#98a4b1'}, musclesSvg);
@@ -667,7 +679,7 @@ function render(){
   $('#modePatient').classList.toggle('on', !teach);
   $('#matrixBox').classList.toggle('patientHidden', !teach);
   $('#musclesSub').textContent = teach
-    ? 'Excited muscles glow coral; their antagonists (inhibited) turn blue. The obliques run from the nasal side to insert on the temporal quadrants behind the equator (dashed = behind the globe); SO is reflected through the trochlea (small ring).'
+    ? 'Excited muscles glow coral; antagonists (inhibited) turn blue. Recti insert anterior to the equator at graded distances from the limbus (spiral of Tillaux — hover a muscle for mm). Obliques insert on the temporal quadrants BEHIND the equator (dashed = hidden); SO reflects through the trochlea and passes under SR; IO passes under IR.'
     : 'The glowing muscles are the ones pulling the eyes; the blue ones are relaxing.';
   document.querySelectorAll('.mLabel').forEach(t=>t.style.display = teach ? '' : 'none');
 }
