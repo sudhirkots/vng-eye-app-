@@ -106,14 +106,48 @@
 
   footer{max-width:1280px;margin:0 auto;padding:6px 16px 22px;color:var(--ink-soft);font-size:.75rem}
   .patientHidden{display:none !important}
+
+  /* ---------- One-frame (compact) overview with click-to-enlarge ---------- */
+  .card{position:relative}
+  body.compact main{grid-template-columns:repeat(3,1fr);gap:10px;padding:10px;max-width:none;align-items:start}
+  @media(max-width:900px){body.compact main{grid-template-columns:1fr}}
+  body.compact .card{padding:8px 12px}
+  body.compact .card h2{font-size:.88rem}
+  body.compact .wide{grid-column:auto}
+  body.compact footer{display:none}
+  body.compact .card:not(.enlarged) .compactHide{display:none}
+  .zoomOverlay{position:absolute;inset:0;display:none;cursor:zoom-in;z-index:5;border-radius:14px}
+  .zoomOverlay:hover{background:rgba(28,58,94,.06)}
+  .zoomOverlay .zi{position:absolute;right:10px;bottom:8px;font-size:.95rem;color:var(--navy-soft);
+    background:#fff;border:1px solid var(--line);border-radius:6px;padding:0 7px}
+  body.compact .card:not(.enlarged) .zoomOverlay{display:block}
+  #backdrop{position:fixed;inset:0;background:rgba(28,58,94,.45);display:none;z-index:40}
+  #backdrop.on{display:block}
+  body.compact .card.enlarged{position:fixed;inset:3vh 4vw;z-index:50;overflow:auto;
+    box-shadow:0 12px 44px rgba(10,25,45,.4);padding:14px 18px}
+  body.compact .card.enlarged svg{max-width:760px;margin:0 auto}
+  body.compact #canalCard.enlarged #headSvg{max-width:620px}
+  .closeBtn{display:none;position:absolute;top:10px;right:12px;width:30px;height:30px;z-index:60;
+    align-items:center;justify-content:center;background:#fff;border:1.5px solid var(--line);
+    border-radius:50%;cursor:pointer;font-size:1rem;color:var(--navy)}
+  body.compact .card.enlarged .closeBtn{display:inline-flex}
+  #miniStatus{display:none;font-size:.75rem;color:var(--ink-soft);margin-top:4px;line-height:1.35}
+  body.compact #eyesCard:not(.enlarged) #miniStatus{display:block}
+  .hint{display:none;font-size:.72rem;color:#c9d4e2;margin-left:10px}
+  body.compact .hint{display:inline}
 </style>
 </head>
-<body>
+<body class="compact">
 
 <header>
   <h1>BPPV Nystagmus Simulator</h1>
   <span class="accent">Phase 1 · Canals &amp; Muscles</span>
+  <span class="hint">click a panel to enlarge · Esc to shrink</span>
   <div class="spacer"></div>
+  <div class="modeSwitch" style="margin-right:10px">
+    <button id="viewCompact" class="on">One frame</button>
+    <button id="viewFull">Full page</button>
+  </div>
   <div class="modeSwitch">
     <button id="modeTeach" class="on">Teaching</button>
     <button id="modePatient">Patient</button>
@@ -123,29 +157,33 @@
 <main>
 
   <!-- ==================== CANAL PANEL ==================== -->
-  <section class="card">
-    <h2>Semicircular canals <span style="font-weight:400;color:var(--ink-soft);font-size:.8rem">— head viewed from above (schematic, not to scale)</span></h2>
-    <p class="sub">Click a canal (or use the buttons), then choose the endolymph flow direction.
+  <section class="card" id="canalCard">
+    <button class="closeBtn" title="Back to overview">✕</button>
+    <div class="zoomOverlay" title="Click to enlarge"><span class="zi">⤢</span></div>
+    <h2>Semicircular canals <span class="compactHide" style="font-weight:400;color:var(--ink-soft);font-size:.8rem">— head viewed from above (schematic, not to scale)</span></h2>
+    <p class="sub compactHide">Click a canal (or use the buttons), then choose the endolymph flow direction.
        AC/PC pairs lie in the LARP / RALP planes (~45° to the sagittal plane).</p>
     <svg id="headSvg" viewBox="0 0 520 440" aria-label="Semicircular canal schematic"></svg>
-    <div class="canalBtns" id="canalBtns"></div>
-    <div class="flowRow" id="flowRow">
+    <div class="canalBtns compactHide" id="canalBtns"></div>
+    <div class="flowRow compactHide" id="flowRow">
       <button data-flow="petal">Ampullopetal <span style="color:var(--ink-soft)">(toward ampulla)</span><span class="tag" id="tagPetal"></span></button>
       <button data-flow="fugal">Ampullofugal <span style="color:var(--ink-soft)">(away from ampulla)</span><span class="tag" id="tagFugal"></span></button>
     </div>
   </section>
 
   <!-- ==================== MUSCLE PANEL ==================== -->
-  <section class="card">
-    <h2>Extraocular muscles <span style="font-weight:400;color:var(--ink-soft);font-size:.8rem">— examiner's view (patient's right eye on your left)</span></h2>
-    <p class="sub" id="musclesSub">Excited muscles glow coral; their antagonists (inhibited) turn blue.</p>
+  <section class="card" id="muscleCard">
+    <button class="closeBtn" title="Back to overview">✕</button>
+    <div class="zoomOverlay" title="Click to enlarge"><span class="zi">⤢</span></div>
+    <h2>Extraocular muscles <span class="compactHide" style="font-weight:400;color:var(--ink-soft);font-size:.8rem">— examiner's view (patient's right eye on your left)</span></h2>
+    <p class="sub compactHide" id="musclesSub">Excited muscles glow coral; their antagonists (inhibited) turn blue.</p>
     <svg id="musclesSvg" viewBox="0 0 640 340" aria-label="Extraocular muscles"></svg>
-    <div class="legend">
+    <div class="legend compactHide">
       <span><span class="sw" style="background:var(--coral)"></span>Excited / contracting</span>
       <span><span class="sw" style="background:var(--blue-inhib)"></span>Inhibited / relaxing</span>
       <span><span class="sw" style="background:var(--neutral-muscle)"></span>Not driven by this canal</span>
     </div>
-    <div id="orbitBox">
+    <div id="orbitBox" class="compactHide">
       <h3 class="orbHead">Muscle courses — orbits viewed from above</h3>
       <p class="sub">Same orientation as the canal diagram (patient's LEFT on your left). The rectus muscle
          plane sits ~23° from the optical axis; the oblique tendons run ~51° to it — this is why SR/IR are
@@ -153,7 +191,7 @@
          globe or under another muscle.</p>
       <svg id="orbitSvg" viewBox="0 0 640 372" aria-label="Orbits viewed from above"></svg>
     </div>
-    <details class="matrix" id="hpBox" open>
+    <details class="matrix compactHide" id="hpBox" open>
       <summary>Anatomical actions vs clinical testing (H-pattern)</summary>
       <p class="sub" style="margin-top:6px">Right eye, anterior view. A muscle's <b>anatomical action</b> (left) is its pull acting
          alone; <b>clinical testing</b> (right) first turns the eye so one muscle's action is isolated:
@@ -164,24 +202,29 @@
   </section>
 
   <!-- ==================== ANIMATED EYES ==================== -->
-  <section class="card wide">
-    <h2>Resulting nystagmus <span style="font-weight:400;color:var(--ink-soft);font-size:.8rem">— examiner's view; the iris spokes make torsion visible</span></h2>
-    <div class="eyeCtrls">
+  <section class="card wide" id="eyesCard">
+    <button class="closeBtn" title="Back to overview">✕</button>
+    <div class="zoomOverlay" title="Click to enlarge"><span class="zi">⤢</span></div>
+    <h2>Resulting nystagmus <span class="compactHide" style="font-weight:400;color:var(--ink-soft);font-size:.8rem">— examiner's view; the iris spokes make torsion visible</span></h2>
+    <div class="eyeCtrls compactHide">
       <button id="btnPause">⏸ Pause</button>
       <button id="btnSlow">🐢 Slow motion</button>
       <span id="beatLabel" style="font-size:.85rem;color:var(--ink-soft)"></span>
     </div>
     <svg id="eyesSvg" viewBox="0 0 660 315" aria-label="Animated nystagmus"></svg>
-    <div class="caption" id="caption"></div>
-    <div class="clinNote" id="clinNote"></div>
+    <div id="miniStatus"></div>
+    <div class="caption compactHide" id="caption"></div>
+    <div class="clinNote compactHide" id="clinNote"></div>
 
-    <details class="matrix" id="matrixBox">
+    <details class="matrix compactHide" id="matrixBox">
       <summary>Reference — full canal → muscle → nystagmus matrix</summary>
       <table id="matrixTable"></table>
     </details>
   </section>
 
 </main>
+
+<div id="backdrop"></div>
 
 <footer>
   Schematic teaching tool — canal geometry is stylised (true canal planes: horizontal canals pitched ~30° up
@@ -1002,10 +1045,14 @@ function render(){
     const mv = actionVector();
     updateMuscleCaption(mv);
     updateRoseMuscle(mv);
+    $('#miniStatus').textContent =
+      `${MUSCLE_NAMES[state.selMuscle.m]}, ${state.selMuscle.eye==='L'?'left':'right'} eye — single-muscle action`;
   } else {
     const v = nystagmusVector();
     updateCaption(v);
     updateRose(v);
+    $('#miniStatus').textContent =
+      `${c.label} · ${state.flow==='petal'?'ampullopetal':'ampullofugal'} (${v.excited?'excitatory':'inhibitory'}) → ${fastPhaseText(v)}`;
   }
 
   // teaching-only elements
@@ -1054,6 +1101,30 @@ document.querySelectorAll('#flowRow button').forEach(b=>
   b.addEventListener('click', ()=>{ state.flow=b.dataset.flow; selectCanal(null); }));
 $('#modeTeach').addEventListener('click', ()=>{ state.mode='teaching'; render(); });
 $('#modePatient').addEventListener('click', ()=>{ state.mode='patient'; render(); });
+/* one-frame overview: click a panel to enlarge it; Esc / ✕ / backdrop to shrink */
+function enlargeCard(id){
+  closeEnlarged();
+  document.getElementById(id).classList.add('enlarged');
+  $('#backdrop').classList.add('on');
+}
+function closeEnlarged(){
+  document.querySelectorAll('.card.enlarged').forEach(x=>x.classList.remove('enlarged'));
+  $('#backdrop').classList.remove('on');
+}
+document.querySelectorAll('.zoomOverlay').forEach(z=>
+  z.addEventListener('click', ()=>enlargeCard(z.closest('.card').id)));
+document.querySelectorAll('.closeBtn').forEach(b=>
+  b.addEventListener('click', e=>{ e.stopPropagation(); closeEnlarged(); }));
+$('#backdrop').addEventListener('click', closeEnlarged);
+document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeEnlarged(); });
+function setView(v){
+  document.body.classList.toggle('compact', v==='compact');
+  $('#viewCompact').classList.toggle('on', v==='compact');
+  $('#viewFull').classList.toggle('on', v!=='compact');
+  closeEnlarged();
+}
+$('#viewCompact').addEventListener('click', ()=>setView('compact'));
+$('#viewFull').addEventListener('click', ()=>setView('full'));
 $('#btnPause').addEventListener('click', ()=>{ state.paused=!state.paused; $('#btnPause').classList.toggle('on', state.paused); $('#btnPause').textContent = state.paused?'▶ Resume':'⏸ Pause'; });
 $('#btnSlow').addEventListener('click', ()=>{ state.slowmo=!state.slowmo; $('#btnSlow').classList.toggle('on', state.slowmo); });
 render();
