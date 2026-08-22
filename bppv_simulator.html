@@ -154,6 +154,25 @@
   body.compact .card.enlarged .closeBtn{display:inline-flex}
   .hint{display:none;font-size:.72rem;color:#c9d4e2;margin-left:10px}
   body.compact .hint{display:inline}
+
+  /* ---------- Maneuver mode (Dix-Hallpike / Epley) ---------- */
+  #patientCard,#labCard{display:none}
+  body.maneuvers #patientCard{display:block;grid-column:span 2}
+  body.maneuvers #labCard{display:block}
+  body.maneuvers #canalCard,body.maneuvers #muscleCard{display:none}
+  body.maneuvers #eyesCard{grid-column:1/-1}
+  body.maneuvers #eyesSvg{max-width:400px;margin:0 auto}
+  body.maneuvers #patSvg{max-width:600px;margin:0 auto;display:block}
+  body.maneuvers #labSvg{max-width:295px;margin:0 auto;display:block}
+  body.maneuvers #mStepNote{min-height:34px}
+  body.maneuvers #summaryBar{display:none}   /* the step note carries the status */
+  .mCtrls{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;align-items:center}
+  .mCtrls button{border:1.5px solid var(--line);background:#fbfcfe;border-radius:8px;padding:5px 10px;cursor:pointer;font-size:.78rem}
+  .mCtrls button.sel{border-color:var(--coral);background:#fdeee9;font-weight:600;color:var(--navy)}
+  .mCtrls button.tp{font-size:.84rem;padding:5px 12px}
+  .mCtrls .gap{flex:1}
+  #mStepNote{margin-top:6px;font-size:.84rem;line-height:1.45;color:var(--ink);background:#fbf6f4;
+    border-left:4px solid var(--coral);border-radius:0 8px 8px 0;padding:7px 11px;min-height:44px}
 </style>
 </head>
 <body class="compact">
@@ -163,6 +182,10 @@
   <span class="accent">Phase 1 · Canals &amp; Muscles</span>
   <span class="hint">⤢ enlarges a panel for detail · Esc shrinks</span>
   <div class="spacer"></div>
+  <div class="modeSwitch" style="margin-right:10px">
+    <button id="tabExplore" class="on">Explore</button>
+    <button id="tabManeuver">Maneuvers</button>
+  </div>
   <div class="modeSwitch" style="margin-right:10px">
     <button id="viewCompact" class="on">One frame</button>
     <button id="viewFull">Full page</button>
@@ -221,6 +244,31 @@
          its arrows here.</p>
       <svg id="hpSvg" viewBox="0 0 640 268" aria-label="Anatomical actions vs clinical testing"></svg>
     </details>
+  </section>
+
+  <!-- ==================== MANEUVER MODE: PATIENT ==================== -->
+  <section class="card" id="patientCard">
+    <h2>Positional maneuver <span id="mTitle" style="color:var(--coral)"></span></h2>
+    <svg id="patSvg" viewBox="0 0 880 400" aria-label="Patient maneuver animation"></svg>
+    <div class="mCtrls" id="mPick">
+      <button data-m="dh" data-side="R" class="sel">Dix-Hallpike RIGHT</button>
+      <button data-m="dh" data-side="L">Dix-Hallpike LEFT</button>
+      <button data-m="epley" data-side="R">Epley RIGHT</button>
+      <button data-m="epley" data-side="L">Epley LEFT</button>
+      <span class="gap"></span>
+      <button id="mReset" class="tp" title="Restart maneuver">⏮</button>
+      <button id="mPrev" class="tp">◀ Step</button>
+      <button id="mPlay" class="tp">⏸ Pause</button>
+      <button id="mNext" class="tp">Step ▶</button>
+      <button id="mSlow" class="tp">🐢 Slow</button>
+    </div>
+    <div id="mStepNote"></div>
+  </section>
+
+  <!-- ==================== MANEUVER MODE: LABYRINTH ==================== -->
+  <section class="card" id="labCard">
+    <h2>Inside the canal <span id="labSide" style="font-weight:400;color:var(--ink-soft);font-size:.8rem"></span></h2>
+    <svg id="labSvg" viewBox="0 0 420 430" aria-label="Canal with otoconia"></svg>
   </section>
 
   <!-- ==================== ANIMATED EYES ==================== -->
@@ -783,6 +831,271 @@ function buildHPattern(){
 }
 
 /* =====================================================================
+   2d. MANEUVER MODE — Dix-Hallpike & Epley with gravity-driven otoconia.
+   The posterior canal is drawn IN ITS OWN PLANE as a ring: the 45° head
+   turn of the Dix-Hallpike brings that plane into the plane of the whole
+   maneuver, so head pitch maps to a single ring rotation θ. The debris
+   slides toward the lowest reachable point (overdamped, viscous), and
+   the canal signal — hence the nystagmus with its latency, crescendo,
+   decay and reversal — EMERGES from the debris motion; nothing is
+   scripted. Debris coordinate s ∈ [0,1]: 0 = at the ampulla, 1 = the
+   common-crus exit (s > 1 = sliding through the crus into the utricle).
+   Ring angle α(s) = 135° + 270°·s (screen degrees, y down); the world
+   angle of a debris particle is α(s) + θ; it slides downhill at
+   ds/dt = K·cos(α+θ), giving equilibrium at the lowest in-canal point.
+   ===================================================================== */
+const patSvg = $('#patSvg'), labSvg = $('#labSvg');
+const M = { active:false, side:'R', man:'dh', steps:[], idx:0,
+            phase:'hold', t:0, playing:true, slow:false,
+            pose:null, from:null, to:null,
+            s:0.05, I:0, sign:1, vec:null, parts:null, lab:null };
+const TWEEN_MS = 1700, DEBRIS_K = 0.14, NYS_GAIN = 9;
+
+function mSteps(man, side){
+  const S = side==='R' ? 'RIGHT' : 'LEFT', O = side==='R' ? 'LEFT' : 'RIGHT';
+  const sit = {name:`Sit upright — head turned 45° to the ${S}`, tau:0, headA:-90, flap:0, yaw:45, theta:0, hold:2600, roll:false,
+    noteT:`The 45° head turn brings the ${S.toLowerCase()} posterior canal into the plane of the coming movement (the LARP/RALP geometry from the canal panel). The otoconia rest at the lowest point of the canal, just past the ampulla.`,
+    noteP:`The head is turned so the affected canal lines up with the movement to come.`};
+  const hang = {name:'Recline — head hanging ~30° below horizontal', tau:90, headA:30, flap:30, yaw:45, theta:-120, hold:9000, roll:false,
+    noteT:`The canal rotates ~120°: the debris falls AWAY from the ampulla (ampullofugal → excitatory). After a short latency the nystagmus builds — UPBEAT with torsion toward the ${S} ear — crescendos, then fades as the debris settles. A positive Dix-Hallpike.`,
+    noteP:`Lying back quickly makes the loose crystals tumble through the canal — this is the moment the spinning starts, then it dies away.`};
+  if(man==='dh') return [sit, hang,
+    {name:'Sit back up', tau:0, headA:-90, flap:0, yaw:45, theta:0, hold:8000, roll:false,
+     noteT:`Sitting up, the debris slides BACK toward the ampulla (ampullopetal → inhibitory): a briefer REVERSAL — downbeat with torsion toward the ${O} ear. Test complete: ${S.toLowerCase()} posterior-canal BPPV confirmed. (Debris is back where it started — the diagnostic test does not treat.)`,
+     noteP:`Sitting up makes the crystals slide back — a second, briefer wave of spinning in the opposite direction.`}];
+  return [sit, hang,
+    {name:`Turn the head 90° to the ${O} (still supine)`, tau:90, headA:0, flap:10, yaw:-45, theta:-200, hold:8000, roll:false,
+     noteT:`The debris advances AROUND the canal, farther from the ampulla → another burst of the same upbeat–torsional nystagmus. Same-direction nystagmus here ("orthotropic") predicts a successful Epley.`,
+     noteP:`Turning the head rolls the crystals farther along the tube.`},
+    {name:`Roll onto the ${O} shoulder — nose 45° toward the floor`, tau:90, headA:-25, flap:0, yaw:-135, theta:-270, hold:8000, roll:true,
+     noteT:`The debris passes the apex of the canal and approaches the COMMON CRUS — the doorway back to the utricle.`,
+     noteP:`Rolling over carries the crystals toward the exit of the tube.`},
+    {name:'Sit up (head still turned)', tau:0, headA:-90, flap:0, yaw:-45, theta:-360, hold:9000, roll:false,
+     noteT:`The debris drops through the common crus INTO THE UTRICLE — out of the canal. Repositioned: further position changes now provoke no nystagmus. Keep the patient upright for a few minutes.`,
+     noteP:`The crystals fall back into the chamber they came from, where they can do no harm. Done!`}];
+}
+
+function buildPatientPanel(){
+  patSvg.innerHTML = '';
+  const P = M.parts = {};
+  el('rect', {x:150, y:330, width:240, height:14, rx:6, fill:'#93a0b0'}, patSvg);
+  el('rect', {x:245, y:266, width:46, height:66, fill:'#aab4c0'}, patSvg);
+  el('rect', {x:120, y:252, width:522, height:14, rx:7, fill:'#b7c9dd', stroke:'#7e9cc0', 'stroke-width':1.5}, patSvg);
+  P.flap = el('g', {}, patSvg);
+  el('rect', {x:642, y:252, width:150, height:14, rx:7, fill:'#b7c9dd', stroke:'#7e9cc0', 'stroke-width':1.5}, P.flap);
+  P.legs  = el('path', {d:'', stroke:'#7e9cc0', 'stroke-width':26, fill:'none', 'stroke-linecap':'round', 'stroke-linejoin':'round'}, patSvg);
+  P.torso = el('line', {stroke:'#5f7fa6', 'stroke-width':38, 'stroke-linecap':'round'}, patSvg);
+  P.arm   = el('line', {stroke:'#4f6f96', 'stroke-width':13, 'stroke-linecap':'round'}, patSvg);
+  P.head  = el('g', {}, patSvg);
+  el('circle', {cx:0, cy:0, r:25, fill:'#f3dcc8', stroke:'#d9b8a5', 'stroke-width':2}, P.head);
+  el('path', {d:'M -25 -4 A 25 25 0 0 1 14 -21 L 6 -5 Z', fill:'#8a6a4f'}, P.head);
+  el('path', {d:'M -25 2 L -34 8 L -24 12 Z', fill:'#f3dcc8', stroke:'#d9b8a5', 'stroke-width':1.5}, P.head);
+  el('circle', {cx:-13, cy:-2, r:2.4, fill:'#333'}, P.head);
+  P.ann = el('g', {}, patSvg);
+  P.refLine  = el('line', {stroke:'#3d6fb4', 'stroke-width':1.6, 'stroke-dasharray':'6 5'}, P.ann);
+  P.headLine = el('line', {stroke:'#e0b93c', 'stroke-width':3.4, 'stroke-linecap':'round'}, P.ann);
+  P.arc = el('path', {fill:'none', stroke:'#3f9e57', 'stroke-width':2.4}, P.ann);
+  P.deg = el('text', {'font-size':17, 'font-weight':700, fill:'#3f9e57'}, P.ann);
+  P.rollG = el('g', {}, patSvg);
+  el('path', {d:'M 470 150 A 62 62 0 0 1 588 146', fill:'none', stroke:'#e2543a', 'stroke-width':4, 'marker-end':'url(#ahFast)'}, P.rollG);
+  P.rollText = el('text', {x:525, y:128, 'text-anchor':'middle', 'font-size':13.5, 'font-weight':600, fill:'#e2543a'}, P.rollG);
+  const yg = el('g', {transform:'translate(86,88)'}, patSvg);
+  el('circle', {cx:0, cy:0, r:35, fill:'#f7fafc', stroke:'#dde4ec', 'stroke-width':1.5}, yg);
+  P.yawHead = el('g', {}, yg);
+  el('circle', {cx:0, cy:0, r:22, fill:'#f3dcc8', stroke:'#d9b8a5', 'stroke-width':1.8}, P.yawHead);
+  el('path', {d:'M -7 -20 L 0 -33 L 7 -20 Z', fill:'#f3dcc8', stroke:'#d9b8a5', 'stroke-width':1.5}, P.yawHead);
+  P.yawText = el('text', {x:0, y:54, 'text-anchor':'middle', 'font-size':11.5, fill:'#5a6b7d'}, yg);
+  P.stepText = el('text', {x:460, y:26, 'text-anchor':'middle', 'font-size':16, 'font-weight':700, fill:'#1c3a5e'}, patSvg);
+}
+
+function updatePatient(p){
+  const P = M.parts, hip = [470,246];
+  const ta = (-90 + p.tau) * Math.PI/180;
+  const sh = [hip[0]+150*Math.cos(ta), hip[1]+150*Math.sin(ta)];
+  P.torso.setAttribute('x1',hip[0]); P.torso.setAttribute('y1',hip[1]);
+  P.torso.setAttribute('x2',sh[0].toFixed(1)); P.torso.setAttribute('y2',sh[1].toFixed(1));
+  P.legs.setAttribute('d', `M ${hip[0]} ${hip[1]} L 330 243 L 206 240`);
+  const ha = p.headA*Math.PI/180;
+  const hc = [sh[0]+48*Math.cos(ha), sh[1]+48*Math.sin(ha)];
+  P.head.setAttribute('transform', `translate(${hc[0].toFixed(1)},${hc[1].toFixed(1)}) rotate(${(p.headA+90).toFixed(1)})`);
+  P.arm.setAttribute('x1', sh[0]); P.arm.setAttribute('y1', sh[1]);
+  const aa = ta + 0.55;
+  P.arm.setAttribute('x2', (sh[0]+82*Math.cos(aa)).toFixed(1)); P.arm.setAttribute('y2', (sh[1]+82*Math.sin(aa)).toFixed(1));
+  P.flap.setAttribute('transform', `rotate(${p.flap} 642 259)`);
+  const show = p.tau > 45;
+  P.ann.style.display = show ? '' : 'none';
+  if(show){
+    const nx = sh[0]+6, ny = sh[1];
+    P.refLine.setAttribute('x1', nx-12); P.refLine.setAttribute('y1', ny);
+    P.refLine.setAttribute('x2', nx+155); P.refLine.setAttribute('y2', ny);
+    P.headLine.setAttribute('x1', nx); P.headLine.setAttribute('y1', ny);
+    P.headLine.setAttribute('x2', (nx+125*Math.cos(ha)).toFixed(1)); P.headLine.setAttribute('y2', (ny+125*Math.sin(ha)).toFixed(1));
+    const r=72;
+    P.arc.setAttribute('d', `M ${nx+r} ${ny} A ${r} ${r} 0 0 ${p.headA>0?1:0} ${(nx+r*Math.cos(ha)).toFixed(1)} ${(ny+r*Math.sin(ha)).toFixed(1)}`);
+    P.deg.setAttribute('x', nx+r+8); P.deg.setAttribute('y', ny + (p.headA>0 ? 30 : -12));
+    P.deg.textContent = Math.round(Math.abs(p.headA)) + '°';
+  }
+  const y = M.side==='R' ? p.yaw : -p.yaw;
+  P.yawHead.setAttribute('transform', `rotate(${y.toFixed(1)})`);
+  P.yawText.textContent = Math.abs(p.yaw) < 3 ? 'head straight' : `head ${Math.round(Math.abs(p.yaw))}° ${y>0?'right':'left'}`;
+  P.rollG.style.display = p.roll ? '' : 'none';
+  if(p.roll) P.rollText.textContent = `roll body to the ${M.side==='R'?'LEFT':'RIGHT'}`;
+}
+
+function buildLabPanel(){
+  labSvg.innerHTML = '';
+  const L = M.lab = {}, CX = L.CX = 210, CY = L.CY = 195, R = L.R = 95;
+  const q = d => d*Math.PI/180;
+  const root = el('g', {transform: M.side==='L' ? `translate(${2*CX},0) scale(-1,1)` : ''}, labSvg);
+  L.rot = el('g', {}, root);
+  const p0 = [CX+R*Math.cos(q(135)), CY+R*Math.sin(q(135))];   // ampullary end (bottom-left)
+  const p1 = [CX+R*Math.cos(q(45)),  CY+R*Math.sin(q(45))];    // crus end (bottom-right)
+  const d = `M ${p0[0].toFixed(1)} ${p0[1].toFixed(1)} A ${R} ${R} 0 1 1 ${p1[0].toFixed(1)} ${p1[1].toFixed(1)}`;
+  el('path', {d, stroke:'#ecd3c9', 'stroke-width':24, fill:'none', 'stroke-linecap':'round'}, L.rot);
+  el('path', {d, stroke:'#9fbfdc', 'stroke-width':9, fill:'none', 'stroke-linecap':'round'}, L.rot);
+  L.utr = [CX, CY+R-14];
+  el('ellipse', {cx:L.utr[0], cy:L.utr[1], rx:42, ry:27, fill:'#cfe0ee', stroke:'#9db8ce', 'stroke-width':2}, L.rot);
+  el('line', {x1:p1[0], y1:p1[1], x2:L.utr[0]+30, y2:L.utr[1]-16, stroke:'#ecd3c9', 'stroke-width':17, 'stroke-linecap':'round'}, L.rot);
+  el('line', {x1:p1[0], y1:p1[1], x2:L.utr[0]+30, y2:L.utr[1]-16, stroke:'#9fbfdc', 'stroke-width':7, 'stroke-linecap':'round'}, L.rot);
+  el('line', {x1:p0[0], y1:p0[1], x2:L.utr[0]-30, y2:L.utr[1]-16, stroke:'#ecd3c9', 'stroke-width':17, 'stroke-linecap':'round'}, L.rot);
+  el('line', {x1:p0[0], y1:p0[1], x2:L.utr[0]-30, y2:L.utr[1]-16, stroke:'#9fbfdc', 'stroke-width':7, 'stroke-linecap':'round'}, L.rot);
+  el('ellipse', {cx:p0[0], cy:p0[1], rx:19, ry:12, fill:'#cfe0ee', stroke:'#8fb0c9', 'stroke-width':1.6,
+                 transform:`rotate(45 ${p0[0]} ${p0[1]})`}, L.rot);                      // ampulla
+  const c0 = [CX+R*Math.cos(q(128)), CY+R*Math.sin(q(128))];
+  el('line', {x1:CX+(R-10)*Math.cos(q(128)), y1:CY+(R-10)*Math.sin(q(128)),
+              x2:CX+(R+10)*Math.cos(q(128)), y2:CY+(R+10)*Math.sin(q(128)),
+              stroke:'#3f9e57', 'stroke-width':3.5, 'stroke-linecap':'round'}, L.rot);   // cupula (green)
+  L.debris = el('g', {}, L.rot);
+  L.dots = [];
+  for(let i=0;i<4;i++) L.dots.push(el('circle', {r:4.5, fill:'#e59b3f', stroke:'#b06f1e', 'stroke-width':1.2}, L.debris));
+  // labels follow their structures as the panel rotates (kept upright)
+  const mkLbl = (txt, ax, ay) => {
+    const t = el('text', {x:ax, y:ay, 'font-size':12.5, 'font-weight':600, fill:'#5a6b7d', 'text-anchor':'middle'}, labSvg);
+    t.textContent = txt;
+    return {t, ax, ay};
+  };
+  L.labels = [
+    mkLbl('ampulla', p0[0], p0[1]),
+    mkLbl('utricle', L.utr[0], L.utr[1]),
+    mkLbl('common crus', p1[0], p1[1]),
+  ];
+  el('line', {x1:378, y1:34, x2:378, y2:66, stroke:'#8a94a0', 'stroke-width':2.6, 'marker-end':'url(#ahSlow)'}, labSvg);
+  const g = el('text', {x:378, y:26, 'text-anchor':'middle', 'font-size':12, 'font-weight':700, fill:'#8a94a0'}, labSvg);
+  g.textContent = 'g';
+  const cap = el('text', {x:210, y:424, 'text-anchor':'middle', 'font-size':12.5, fill:'#98a4b1'}, labSvg);
+  cap.textContent = 'green = cupula · orange = debris · rotates with the head';
+}
+
+function updateLab(theta){
+  const L = M.lab, q = d => d*Math.PI/180;
+  L.rot.setAttribute('transform', `rotate(${theta.toFixed(1)} ${L.CX} ${L.CY})`);
+  // keep the anatomical labels attached (and upright) as the panel rotates
+  const th = q(theta), mirror = M.side==='L';
+  for(const lb of L.labels){
+    const dx = lb.ax - L.CX, dy = lb.ay - L.CY;
+    let wx = L.CX + dx*Math.cos(th) - dy*Math.sin(th);
+    let wy = L.CY + dx*Math.sin(th) + dy*Math.cos(th);
+    const len = Math.hypot(wx-L.CX, wy-L.CY) || 1;
+    wx += (wx-L.CX)/len * 30; wy += (wy-L.CY)/len * 26;      // push outward, clear of the tube
+    if(mirror) wx = 2*L.CX - wx;
+    lb.t.setAttribute('x', wx.toFixed(1)); lb.t.setAttribute('y', (wy+4).toFixed(1));
+  }
+  for(let i=0;i<L.dots.length;i++){
+    const si = Math.max(0, M.s - i*0.024);
+    let x, y;
+    if(si <= 1){
+      const a = q(135 + 270*si);
+      x = L.CX + L.R*Math.cos(a); y = L.CY + L.R*Math.sin(a);
+    } else {
+      const k = Math.min(1, (si-1)/0.18);        // sliding down the crus into the utricle
+      const p1 = [L.CX + L.R*Math.cos(q(45)), L.CY + L.R*Math.sin(q(45))];
+      x = p1[0] + (L.utr[0]+14 - p1[0])*k; y = p1[1] + (L.utr[1] - p1[1])*k;
+    }
+    L.dots[i].setAttribute('cx', x.toFixed(1)); L.dots[i].setAttribute('cy', y.toFixed(1));
+  }
+}
+
+const lerp = (a,b,k) => a + (b-a)*k;
+const easeIO = k => k<0.5 ? 2*k*k : 1-Math.pow(-2*k+2,2)/2;
+function lerpPose(a, b, k){
+  return { tau:lerp(a.tau,b.tau,k), headA:lerp(a.headA,b.headA,k), flap:lerp(a.flap,b.flap,k),
+           yaw:lerp(a.yaw,b.yaw,k), theta:lerp(a.theta,b.theta,k), roll: k>0.5 ? b.roll : a.roll };
+}
+
+function enterStep(i, instant){
+  M.idx = i;
+  const st = M.steps[i];
+  M.from = {...M.pose};
+  M.to = st;
+  M.phase = instant ? 'hold' : 'tween';
+  M.t = 0;
+  if(instant) M.pose = {...st};
+  $('#mStepNote').innerHTML = `<b>Step ${i+1} of ${M.steps.length}:</b> ` + (state.mode==='teaching' ? st.noteT : st.noteP);
+  M.parts.stepText.textContent = `Step ${i+1}/${M.steps.length} — ${st.name}`;
+  $('#summaryBar').innerHTML =
+    `<b>${M.man==='dh'?'Dix-Hallpike':'Epley'} ${M.side==='R'?'RIGHT':'LEFT'}</b> · Step ${i+1}/${M.steps.length}: ${st.name} — watch the debris (orange) and the eyes.`;
+}
+
+function selectManeuver(man, side){
+  M.man = man; M.side = side;
+  M.steps = mSteps(man, side);
+  M.s = 0.05; M.I = 0; M.sign = 1; M.playing = true; M.slow = false;
+  buildPatientPanel(); buildLabPanel();
+  M.pose = {...M.steps[0]};
+  $('#mTitle').textContent = ' — ' + (man==='dh' ? 'Dix-Hallpike' : 'Epley') + ' ' + (side==='R' ? 'RIGHT' : 'LEFT');
+  $('#labSide').textContent = `— ${side==='R'?'right':'left'} posterior canal, seen in its own plane`;
+  document.querySelectorAll('#mPick button[data-m]').forEach(b =>
+    b.classList.toggle('sel', b.dataset.m===man && b.dataset.side===side));
+  $('#mPlay').textContent = '⏸ Pause';
+  $('#mSlow').classList.remove('sel');
+  enterStep(0, true);
+  updatePatient(M.pose); updateLab(M.pose.theta);
+}
+
+function maneuverTick(dtMs){
+  const dt = (dtMs/1000) * (M.slow ? 0.45 : 1);
+  const st = M.to;
+  if(M.phase === 'tween'){
+    M.t += dtMs * (M.slow ? 0.45 : 1);
+    const k = easeIO(Math.min(1, M.t/TWEEN_MS));
+    M.pose = lerpPose(M.from, M.to, k);
+    if(M.t >= TWEEN_MS){ M.phase = 'hold'; M.t = 0; M.pose = {...M.to}; }
+  } else if(M.playing){
+    M.t += dtMs * (M.slow ? 0.45 : 1);
+    if(M.t >= st.hold && M.idx < M.steps.length-1) enterStep(M.idx+1, false);
+  }
+  // ---- debris physics (runs continuously; the nystagmus emerges from it) ----
+  const theta = M.pose.theta;
+  let v = 0;
+  if(M.s <= 1){
+    const world = (135 + 270*M.s + theta) * Math.PI/180;
+    v = DEBRIS_K * Math.cos(world);
+    if(M.s <= 0 && v < 0) v = 0;
+    M.s += v * dt * (270/360);                     // angular → arc-fraction scaling
+    if(M.s > 1){ M.s = 1.001; }                    // reached the crus mouth
+  } else {
+    const world = (45 + theta) * Math.PI/180;      // crus points toward the utricle
+    if(Math.cos(world) > 0.1 || M.pose.tau < 45){  // slides on into the utricle
+      M.s = Math.min(1.25, M.s + 0.25*dt);
+    }
+    v = 0;                                          // out of the canal: no more signal
+  }
+  // nystagmus drive: smoothed |velocity|, sign = ampullofugal(+, excitatory) / -petal(−)
+  const target = Math.min(1, Math.abs(v) * NYS_GAIN);
+  M.I += (target - M.I) * Math.min(1, dt*3.2);
+  if(Math.abs(v) > 0.004) M.sign = v > 0 ? 1 : -1;
+  const c = CANALS[M.side + 'P'];
+  let fy = (c.fast.v==='up' ? -1 : 1), ft = (c.fast.t==='left' ? 1 : -1);
+  M.vec = { excited: M.sign > 0, amp: M.I * (M.sign>0 ? 1 : 0.7),
+            fx: 0, fy: fy*M.sign, ft: ft*M.sign, canal: c, multi: false };
+  updatePatient(M.pose);
+  updateLab(theta);
+  updateRose(M.I > 0.07
+    ? {excited:true, fx:0, fy:M.vec.fy*M.I, ft:M.vec.ft}
+    : {excited:true, fx:0, fy:0, ft:0});
+}
+
+/* =====================================================================
    3. ANIMATED EYES — examiner's view.
    Screen mapping (patient frame → screen): patient's LEFT = screen RIGHT.
      fast.h 'left'  → +x   |  'right' → −x
@@ -913,6 +1226,12 @@ function tick(ts){
   let s;
   if(ph < SLOW_FRAC) s = 0.5 - ph/SLOW_FRAC;
   else               s = -0.5 + (ph-SLOW_FRAC)/(1-SLOW_FRAC);
+  if(M.active){
+    maneuverTick(dt*1000);
+    driveEyes(M.vec, s);
+    requestAnimationFrame(tick);
+    return;
+  }
   if(state.selMuscle){
     /* single-muscle mode: the acting eye performs a smooth contract–relax
        duction along the muscle's action vector; the other eye rests */
@@ -933,7 +1252,13 @@ function tick(ts){
     requestAnimationFrame(tick);
     return;
   }
-  const v = nystagmusVector();
+  driveEyes(nystagmusVector(), s);
+  requestAnimationFrame(tick);
+}
+
+/* Render one animation frame of beating eyes from a nystagmus vector. */
+function driveEyes(v, s){
+  if(!v){ return; }
   for(const eye of ['R','L']){
     /* In vertical-canal BPPV the torsional component dominates in the eye on the
        side of the affected canal, the vertical component in the other eye. */
@@ -950,7 +1275,6 @@ function tick(ts){
     irisGroups[eye].setAttribute('transform', `translate(${E.cx+dx},${E.cy+dy}) rotate(${dg})`);
     updateLids(eye, dy);   // subtle lid-follow on the vertical component
   }
-  requestAnimationFrame(tick);
 }
 
 /* ---------------------------------------------------------------------
@@ -1248,6 +1572,13 @@ function render(){
     ? 'Click any muscle to see its individual action; click a canal to return. Excited muscles glow coral; antagonists (inhibited) turn blue. Recti insert anterior to the equator at graded distances from the limbus (spiral of Tillaux — hover a muscle for mm and nerve). Obliques insert on the temporal quadrants BEHIND the equator (dashed = hidden); SO reflects through the trochlea and passes under SR; IO passes under IR.'
     : 'The glowing muscles are the ones pulling the eyes; the blue ones are relaxing. Tap a muscle to see what it alone does.';
   document.querySelectorAll('.mLabel').forEach(t=>t.style.display = teach ? '' : 'none');
+  // maneuver mode owns the summary bar and step note (refresh honors Teaching/Patient)
+  if(M.active && M.steps.length){
+    const st = M.steps[M.idx];
+    $('#mStepNote').innerHTML = `<b>Step ${M.idx+1} of ${M.steps.length}:</b> ` + (teach ? st.noteT : st.noteP);
+    $('#summaryBar').innerHTML =
+      `<b>${M.man==='dh'?'Dix-Hallpike':'Epley'} ${M.side==='R'?'RIGHT':'LEFT'}</b> · Step ${M.idx+1}/${M.steps.length}: ${st.name} — watch the debris (orange) and the eyes.`;
+  }
 }
 
 /* reference matrix (teaching mode) */
@@ -1307,6 +1638,36 @@ function setView(v){
 }
 $('#viewCompact').addEventListener('click', ()=>setView('compact'));
 $('#viewFull').addEventListener('click', ()=>setView('full'));
+/* Explore ↔ Maneuvers tabs */
+function setAppMode(mode){
+  M.active = (mode === 'maneuver');
+  document.body.classList.toggle('maneuvers', M.active);
+  $('#tabExplore').classList.toggle('on', !M.active);
+  $('#tabManeuver').classList.toggle('on', M.active);
+  closeEnlarged();
+  if(M.active){
+    setView('compact');
+    if(!M.steps.length) selectManeuver('dh', 'R');
+    render();
+  } else {
+    render();
+  }
+}
+$('#tabExplore').addEventListener('click', ()=>setAppMode('explore'));
+$('#tabManeuver').addEventListener('click', ()=>setAppMode('maneuver'));
+document.querySelectorAll('#mPick button[data-m]').forEach(b=>
+  b.addEventListener('click', ()=>selectManeuver(b.dataset.m, b.dataset.side)));
+$('#mReset').addEventListener('click', ()=>selectManeuver(M.man, M.side));
+$('#mNext').addEventListener('click', ()=>{ if(M.idx < M.steps.length-1) enterStep(M.idx+1, false); });
+$('#mPrev').addEventListener('click', ()=>{ if(M.idx > 0) enterStep(M.idx-1, false); });
+$('#mPlay').addEventListener('click', ()=>{
+  M.playing = !M.playing;
+  $('#mPlay').textContent = M.playing ? '⏸ Pause' : '▶ Play';
+});
+$('#mSlow').addEventListener('click', ()=>{
+  M.slow = !M.slow;
+  $('#mSlow').classList.toggle('sel', M.slow);
+});
 $('#btnPause').addEventListener('click', ()=>{ state.paused=!state.paused; $('#btnPause').classList.toggle('on', state.paused); $('#btnPause').textContent = state.paused?'▶ Resume':'⏸ Pause'; });
 $('#btnSlow').addEventListener('click', ()=>{ state.slowmo=!state.slowmo; $('#btnSlow').classList.toggle('on', state.slowmo); });
 render();
