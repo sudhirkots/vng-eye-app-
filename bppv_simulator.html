@@ -930,12 +930,14 @@ function updatePatient(p){
   const sh = [hip[0]+150*Math.cos(ta), hip[1]+150*Math.sin(ta)];
   P.torso.setAttribute('x1',hip[0]); P.torso.setAttribute('y1',hip[1]);
   P.torso.setAttribute('x2',sh[0].toFixed(1)); P.torso.setAttribute('y2',sh[1].toFixed(1));
-  P.legs.setAttribute('d', `M ${hip[0]} ${hip[1]} L 330 243 L 206 240`);
+  P.legs.setAttribute('d', `M ${hip[0]} ${hip[1]} L 360 243 L 252 240`);
   const ha = p.headA*Math.PI/180;
-  const hc = [sh[0]+48*Math.cos(ha), sh[1]+48*Math.sin(ha)];
+  const hc = [sh[0]+56*Math.cos(ha), sh[1]+56*Math.sin(ha)];
   const yWorld = M.side==='R' ? p.yaw : -p.yaw;
+  /* head scaled so its height ≈ 1/7 of total body length (legs ≈ half,
+     torso ≈ 3 head-units) */
   P.head.setAttribute('transform',
-    `translate(${hc[0].toFixed(1)},${hc[1].toFixed(1)}) rotate(${(p.headA + 90 + yWorld*0.14).toFixed(1)})`);
+    `translate(${hc[0].toFixed(1)},${hc[1].toFixed(1)}) rotate(${(p.headA + 90 + yWorld*0.14).toFixed(1)}) scale(1.25)`);
   P.arm.setAttribute('x1', sh[0]); P.arm.setAttribute('y1', sh[1]);
   const aa = ta + 0.55;
   P.arm.setAttribute('x2', (sh[0]+82*Math.cos(aa)).toFixed(1)); P.arm.setAttribute('y2', (sh[1]+82*Math.sin(aa)).toFixed(1));
