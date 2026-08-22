@@ -44,17 +44,20 @@
 
   svg{display:block;width:100%;height:auto}
   svg text{font-family:inherit}
-  .canalTube{fill:none;stroke:#b9c3cf;stroke-width:8;stroke-linecap:round;cursor:pointer}
+  /* two-tone canals: bony canal (pink) with the membranous duct (blue) inside,
+     as in the standard labyrinth figures */
+  .canalBony{fill:none;stroke:#ecd3c9;stroke-width:13;stroke-linecap:round;cursor:pointer}
+  .canalTube{fill:none;stroke:#9fbfdc;stroke-width:5.5;stroke-linecap:round;cursor:pointer}
   .canalTube.sel{stroke:var(--coral)}
   .canalHit{fill:none;stroke:rgba(0,0,0,0);stroke-width:20;cursor:pointer;pointer-events:stroke}
-  .flowDash{fill:none;stroke:#fff;stroke-width:3;stroke-dasharray:5 9;stroke-linecap:round;pointer-events:none;opacity:0}
+  .flowDash{fill:none;stroke:#fff;stroke-width:2.6;stroke-dasharray:4 7;stroke-linecap:round;pointer-events:none;opacity:0}
   .flowDash.on{opacity:1}
   /* stroke-dashoffset INCREASING moves dashes toward the path START = toward the ampulla */
   .flowDash.toAmpulla{animation:dashTo 1s linear infinite}
   .flowDash.fromAmpulla{animation:dashFrom 1s linear infinite}
-  @keyframes dashTo{from{stroke-dashoffset:0}to{stroke-dashoffset:28}}
-  @keyframes dashFrom{from{stroke-dashoffset:28}to{stroke-dashoffset:0}}
-  .ampulla{fill:#8fa0b3;stroke:#6c7f94;stroke-width:1.5;cursor:pointer}
+  @keyframes dashTo{from{stroke-dashoffset:0}to{stroke-dashoffset:22}}
+  @keyframes dashFrom{from{stroke-dashoffset:22}to{stroke-dashoffset:0}}
+  .ampulla{fill:#cfe0ee;stroke:#8fb0c9;stroke-width:1.4;cursor:pointer}
   .ampulla.sel{fill:var(--coral-soft);stroke:var(--coral)}
   .canalLabel{font-size:13px;font-weight:700;fill:var(--ink-soft);cursor:pointer}
   .canalLabel.sel{fill:var(--coral)}
@@ -377,18 +380,21 @@ function el(tag, attrs, parent){
       the viewer's LEFT — labelled on the drawing)
    ===================================================================== */
 const headSvg = $('#headSvg');
-const LABS = { L:{x:168, y:225, m:+1}, R:{x:352, y:225, m:-1} };  // m = mirror sign
+const LABS = { L:{x:185, y:228, m:+1}, R:{x:335, y:228, m:-1} };  // m = mirror sign
 
 /* Local canal geometry (LEFT side; right side is a pure mirror).
    Each canal is a C-shaped arc starting AT the ampulla (path start = ampulla),
    so dash animation "toward path start" = ampullopetal. */
+/* Each canal's OPENING now faces the vestibule: the ampullary arm (path start,
+   a0) ends in the dilated ampulla AT the vestibule, and the non-ampullary arm
+   (a1) returns to the vestibule as well — as in the labyrinth reference figure. */
 const CANAL_GEOM = {
-  A: { ox:-12, oy:-34, rot: 45, r:30, fy:0.42, a0:180, a1:150, sweep:1,
-       lblDx:-46, lblDy:-30 },                     // anterior: NW–SE (LARP), ampulla at NW tip
-  H: { ox:  2, oy: 12, rot:  0, r:28, fy:0.85, a0:-115, a1:-69, sweep:0,
-       lblDx: 40, lblDy: 26 },                     // horizontal: near-face-on ring, ampulla anterolateral
-  P: { ox:-14, oy: 34, rot:-45, r:30, fy:0.42, a0:180, a1:150, sweep:1,
-       lblDx:-48, lblDy: 40 },                     // posterior: NE–SW (RALP), ampulla at SW tip
+  A: { ox:-42, oy:-47, rot: 45, r:42, fy:0.42, a0:0, a1:32, sweep:0,
+       lblAt:[-42,-47] },                    // anterior loop extends NW (LARP); label in the loop hollow
+  H: { ox: -6, oy: 22, rot:  0, r:38, fy:0.85, a0:-125, a1:-79, sweep:0,
+       lblAt:[-60, 28] },                    // horizontal ring; label just lateral of the ring
+  P: { ox:-30, oy: 52, rot:-45, r:42, fy:0.42, a0:0, a1:32, sweep:0,
+       lblAt:[-30, 52] },                    // posterior loop extends SW (RALP); label in the loop hollow
 };
 function arcPath(r, a0, a1, sweep){
   const q = d => d*Math.PI/180;
@@ -420,36 +426,49 @@ function buildHead(){
   // labyrinths
   for(const side of ['L','R']){
     const lab = LABS[side];
-    // vestibule
-    el('ellipse', {cx:lab.x, cy:lab.y, rx:10, ry:13, fill:'#e6ebf1', stroke:'#b9c3cf', 'stroke-width':1.5}, headSvg);
+    // vestibule: bony shell + membranous utricle/saccule
+    el('ellipse', {cx:lab.x, cy:lab.y, rx:19, ry:25, fill:'#ecd3c9', stroke:'#d9b8ab', 'stroke-width':1}, headSvg);
+    const ves = el('ellipse', {cx:lab.x, cy:lab.y, rx:14, ry:19.5, fill:'#cfe0ee', stroke:'#9db8ce', 'stroke-width':1.2}, headSvg);
+    const vtip = el('title', {}, ves); vtip.textContent = 'Vestibule — utricle & saccule (the otolith organs; source of the loose otoconia in BPPV)';
+    const ut = el('text', {x:lab.x + lab.m*24, y:lab.y - 2, 'font-size':10, fill:'#8296ab',
+                           'text-anchor': lab.m===1 ? 'start' : 'end'}, headSvg);
+    ut.textContent = 'utricle';
     for(const k of ['A','H','P']){
       const g = CANAL_GEOM[k], id = side + k;
-      const tf = `translate(${lab.x},${lab.y}) scale(${lab.m},1) translate(${g.ox},${g.oy}) rotate(${g.rot}) scale(1,${g.fy})`;
-      const grp = el('g', {transform:tf, 'data-canal':id}, headSvg);
+      // outer group: position/mirror/rotate; inner group: flatten (the loop's foreshortening)
+      const gOuter = el('g', {transform:`translate(${lab.x},${lab.y}) scale(${lab.m},1) translate(${g.ox},${g.oy}) rotate(${g.rot})`,
+                              'data-canal':id}, headSvg);
+      const gtip = el('title', {}, gOuter);
+      gtip.textContent = CANALS[id].label + ' canal — the ampullary arm ends in the dilated ampulla at the vestibule; the non-ampullary arm returns to the vestibule' + (k==='H' ? '' : ' (via the common crus)');
+      const gFlat = el('g', {transform:`scale(1,${g.fy})`}, gOuter);
       const d = arcPath(g.r, g.a0, g.a1, g.sweep);
-      el('path', {d, class:'canalTube', id:'tube'+id}, grp);
-      el('path', {d, class:'flowDash', id:'flow'+id}, grp);
-      el('path', {d, class:'canalHit'}, grp);
-      // ampulla bulb at the path START
-      const q = g.a0*Math.PI/180;
-      el('circle', {cx:g.r*Math.cos(q), cy:g.r*Math.sin(q), r:7/g.fy*0.55, class:'ampulla', id:'amp'+id,
-                    transform:`scale(1,1)`}, grp);
-      grp.addEventListener('click', ()=>selectCanal(id));
-      // label (NOT mirrored)
-      const lx = lab.x + lab.m*(g.ox + g.lblDx), ly = lab.y + g.oy + g.lblDy;
-      const t = el('text', {x:lx, y:ly, class:'canalLabel', id:'lbl'+id, 'text-anchor': lab.m===1?'start':'end'}, headSvg);
+      el('path', {d, class:'canalBony'}, gFlat);                  // bony canal
+      el('path', {d, class:'canalTube', id:'tube'+id}, gFlat);    // membranous duct
+      el('path', {d, class:'flowDash', id:'flow'+id}, gFlat);
+      el('path', {d, class:'canalHit'}, gFlat);
+      // ampulla: pear-shaped dilation of the ampullary arm (path start), with cupula flap
+      const qa = g.a0*Math.PI/180;
+      const px = g.r*Math.cos(qa), py = g.fy*g.r*Math.sin(qa);
+      const tang = Math.atan2(g.fy*g.r*Math.cos(qa), -g.r*Math.sin(qa)) * 180/Math.PI;
+      const gAmp = el('g', {transform:`translate(${px.toFixed(1)},${py.toFixed(1)}) rotate(${tang.toFixed(1)})`}, gOuter);
+      el('ellipse', {cx:0, cy:0, rx:11, ry:7, class:'ampulla', id:'amp'+id}, gAmp);
+      el('line', {x1:2.8, y1:-5.2, x2:2.8, y2:5.2, stroke:'#b06a55', 'stroke-width':1.6, 'stroke-linecap':'round'}, gAmp); // cupula
+      const atip = el('title', {}, gAmp); atip.textContent = 'Ampulla — the cupula (flap) inside is deflected by endolymph flow';
+      gOuter.addEventListener('click', ()=>selectCanal(id));
+      // label (NOT mirrored) — sits in the loop's hollow, as in anatomical figures
+      const lx = lab.x + lab.m*g.lblAt[0], ly = lab.y + g.lblAt[1] + 4;
+      const t = el('text', {x:lx, y:ly, class:'canalLabel', id:'lbl'+id, 'text-anchor':'middle'}, headSvg);
       t.textContent = k + 'C';
       t.addEventListener('click', ()=>selectCanal(id));
     }
   }
-  const n1 = el('text', {x:12, y:420, 'font-size':10.5, fill:'#98a4b1'}, headSvg);
-  n1.textContent = 'dots on the selected canal';
-  const n2 = el('text', {x:12, y:434, 'font-size':10.5, fill:'#98a4b1'}, headSvg);
-  n2.textContent = 'show endolymph flow';
-  // "ampulla" pointer label — repositioned onto the selected canal's ampulla at render time
-  el('line', {id:'ampPtr', x1:0,y1:0,x2:0,y2:0, stroke:'#e2543a', 'stroke-width':1.2, opacity:.8}, headSvg);
-  const at = el('text', {id:'ampLbl', x:0, y:0, 'font-size':11, 'font-weight':600, fill:'#e2543a'}, headSvg);
-  at.textContent = 'ampulla';
+  const notes = ['dots on the selected canal show endolymph flow',
+                 'bulb at each canal’s vestibular end = AMPULLA',
+                 '(the small flap inside it = cupula)'];
+  notes.forEach((txt, i) => {
+    const n = el('text', {x:12, y:406 + i*14, 'font-size':10.5, fill:'#98a4b1'}, headSvg);
+    n.textContent = txt;
+  });
 }
 
 /* canal selector buttons */
@@ -1135,22 +1154,6 @@ function render(){
       const fl = multi ? CANALS[id].excitatoryFlow : state.flow;   // multi: each canal stimulated
       f.classList.add(fl==='petal' ? 'toAmpulla' : 'fromAmpulla');
     }
-  }
-  // "ampulla" pointer label onto the selected canal's ampulla bulb
-  {
-    const amp = $('#amp'+state.canals[0]);
-    const cx = +amp.getAttribute('cx'), cy = +amp.getAttribute('cy');
-    const m = amp.getCTM();             // local → headSvg viewport coords
-    const ax = m.a*cx + m.c*cy + m.e, ay = m.b*cx + m.d*cy + m.f;
-    const left = ax < 260;              // place the label away from the midline
-    const lx = ax + (left ? -26 : 26), ly = ay - 30;
-    const lbl = $('#ampLbl'), ptr = $('#ampPtr');
-    lbl.setAttribute('x', lx); lbl.setAttribute('y', ly - 3);
-    lbl.setAttribute('text-anchor', left ? 'end' : 'start');
-    ptr.setAttribute('x1', ax); ptr.setAttribute('y1', ay - 5);
-    ptr.setAttribute('x2', lx + (left ? 2 : -2)); ptr.setAttribute('y2', ly);
-    lbl.style.display = (muscleMode || multi) ? 'none' : '';
-    ptr.style.display = (muscleMode || multi) ? 'none' : '';
   }
   $('#flowRow').classList.toggle('dim', muscleMode);
   $('#flowRow').classList.toggle('off', multi);
