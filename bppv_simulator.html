@@ -57,7 +57,7 @@
   .flowDash.fromAmpulla{animation:dashFrom 1s linear infinite}
   @keyframes dashTo{from{stroke-dashoffset:0}to{stroke-dashoffset:22}}
   @keyframes dashFrom{from{stroke-dashoffset:22}to{stroke-dashoffset:0}}
-  .ampulla{fill:#cfe0ee;stroke:#8fb0c9;stroke-width:1.4;cursor:pointer}
+  .ampulla{fill:#b9d4e8;stroke:#6f93b4;stroke-width:1.8;cursor:pointer}
   .ampulla.sel{fill:var(--coral-soft);stroke:var(--coral)}
   .canalLabel{font-size:13px;font-weight:700;fill:var(--ink-soft);cursor:pointer}
   .canalLabel.sel{fill:var(--coral)}
@@ -438,12 +438,19 @@ const LABS = { L:{x:185, y:228, m:+1}, R:{x:335, y:228, m:-1} };  // m = mirror 
    (a1) returns to the vestibule as well — as in the labyrinth reference figure. */
 const CANAL_GEOM = {
   A: { ox:-42, oy:-47, rot: 45, r:42, fy:0.42, a0:0, a1:32, sweep:0,
-       lblAt:[-42,-47] },                    // anterior loop extends NW (LARP); label in the loop hollow
+       lblAt:[-42,-47], ampLbl:[-2,-14] },   // anterior loop extends NW (LARP); label in the loop hollow
   H: { ox: -6, oy: 22, rot:  0, r:38, fy:0.85, a0:-125, a1:-79, sweep:0,
-       lblAt:[-60, 28] },                    // horizontal ring; label just lateral of the ring
+       lblAt:[-60, 28], ampLbl:[-15, 13] },  // horizontal ring; label just lateral of the ring
   P: { ox:-30, oy: 52, rot:-45, r:42, fy:0.42, a0:0, a1:32, sweep:0,
-       lblAt:[-30, 52] },                    // posterior loop extends SW (RALP); label in the loop hollow
+       lblAt:[-30, 52], ampLbl:[11, 13] },   // posterior loop extends SW (RALP); label in the loop hollow
 };
+/* end point of a canal arc in labyrinth-local (unmirrored) coordinates */
+function canalEndLocal(g, aDeg){
+  const q = Math.PI/180, a = aDeg*q, rot = g.rot*q;
+  const px = g.r*Math.cos(a), py = g.fy*g.r*Math.sin(a);
+  return [g.ox + px*Math.cos(rot) - py*Math.sin(rot),
+          g.oy + px*Math.sin(rot) + py*Math.cos(rot)];
+}
 function arcPath(r, a0, a1, sweep){
   const q = d => d*Math.PI/180;
   const p0 = [r*Math.cos(q(a0)), r*Math.sin(q(a0))];
@@ -481,6 +488,28 @@ function buildHead(){
     const ut = el('text', {x:lab.x + lab.m*24, y:lab.y - 2, 'font-size':10, fill:'#8296ab',
                            'text-anchor': lab.m===1 ? 'start' : 'end'}, headSvg);
     ut.textContent = 'utricle';
+    /* COMMON CRUS: the non-ampullary arms of AC and PC merge into one medial
+       stem that enters the vestibule (drawn beneath the canals) */
+    {
+      const gCrus = el('g', {transform:`translate(${lab.x},${lab.y}) scale(${lab.m},1)`}, headSvg);
+      const ctip = el('title', {}, gCrus);
+      ctip.textContent = 'Common crus — the shared trunk of the AC and PC non-ampullary arms, entering the vestibule';
+      const eA = canalEndLocal(CANAL_GEOM.A, 32);          // AC non-ampullary end
+      const eP = canalEndLocal(CANAL_GEOM.P, 32);          // PC non-ampullary end
+      const branches = [
+        `M ${eA[0].toFixed(1)} ${eA[1].toFixed(1)} Q 8 -30 24 24`,   // AC arm sweeps medially down…
+        `M ${eP[0].toFixed(1)} ${eP[1].toFixed(1)} Q 15 37 24 32`,   // …PC arm sweeps medially up…
+        `M 24 22 L 24 34 L 11 17`,                                   // …joining in ONE stem into the vestibule
+      ];
+      for(const d of branches) el('path', {d, stroke:'#ecd3c9', 'stroke-width':13, fill:'none', 'stroke-linecap':'round'}, gCrus);
+      for(const d of branches) el('path', {d, stroke:'#9fbfdc', 'stroke-width':5.5, fill:'none', 'stroke-linecap':'round'}, gCrus);
+    }
+    if(lab.m === 1){                                       // label once (mirrored structure on the right)
+      const cc = el('text', {x:lab.x + 44, y:lab.y + 42, 'font-size':9.5, fill:'#8296ab'}, headSvg);
+      cc.textContent = 'common crus';
+      el('line', {x1:lab.x + 42, y1:lab.y + 38, x2:lab.x + 27, y2:lab.y + 29,
+                  stroke:'#8296ab', 'stroke-width':1, opacity:.8}, headSvg);
+    }
     for(const k of ['A','H','P']){
       const g = CANAL_GEOM[k], id = side + k;
       // outer group: position/mirror/rotate; inner group: flatten (the loop's foreshortening)
@@ -508,6 +537,14 @@ function buildHead(){
       const t = el('text', {x:lx, y:ly, class:'canalLabel', id:'lbl'+id, 'text-anchor':'middle'}, headSvg);
       t.textContent = k + 'C';
       t.addEventListener('click', ()=>selectCanal(id));
+    }
+    // small 'amp' marker beside each ampulla, so all six are identifiable at a glance
+    for(const k of ['A','H','P']){
+      const g = CANAL_GEOM[k];
+      const ap = canalEndLocal(g, g.a0);
+      const t = el('text', {x: lab.x + lab.m*(ap[0] + g.ampLbl[0]), y: lab.y + ap[1] + g.ampLbl[1],
+                            'font-size':8.5, 'font-weight':700, fill:'#6f93b4', 'text-anchor':'middle'}, headSvg);
+      t.textContent = 'amp';
     }
   }
   const notes = ['dots on the selected canal show endolymph flow',
