@@ -853,17 +853,21 @@ const TWEEN_MS = 1700, DEBRIS_K = 0.14, NYS_GAIN = 9;
 
 function mSteps(man, side){
   const S = side==='R' ? 'RIGHT' : 'LEFT', O = side==='R' ? 'LEFT' : 'RIGHT';
-  const sit = {name:`Sit upright — head turned 45° to the ${S}`, tau:0, headA:-90, flap:0, yaw:45, theta:0, hold:2600, roll:false,
-    noteT:`The 45° head turn brings the ${S.toLowerCase()} posterior canal into the plane of the coming movement (the LARP/RALP geometry from the canal panel). The otoconia rest at the lowest point of the canal, just past the ampulla.`,
+  const sit0 = {name:'Sit upright — looking straight ahead', tau:0, headA:-90, flap:0, yaw:0, theta:0, hold:2400, roll:false,
+    noteT:`Starting position, seen from the patient's left: one eye, the ear and the nose in profile. In the ${S.toLowerCase()} posterior canal the otoconia lie at the lowest point, near the ampulla.`,
+    noteP:`The patient sits looking straight ahead.`};
+  const sit = {name:`Turn the head 45° to the ${S}`, tau:0, headA:-90, flap:0, yaw:45, theta:0, hold:2600, roll:false,
+    noteT:`The 45° head turn brings the ${S.toLowerCase()} posterior canal into the plane of the coming movement (the LARP/RALP geometry from the canal panel). ` +
+      (side==='R' ? `Turned away from us: the eye and nose disappear and the ear swings forward.` : `Turned toward us: both eyes and the nose come into view, the ear moves back.`),
     noteP:`The head is turned so the affected canal lines up with the movement to come.`};
   const hang = {name:'Recline — head hanging ~30° below horizontal', tau:90, headA:30, flap:30, yaw:45, theta:-120, hold:9000, roll:false,
     noteT:`The canal rotates ~120°: the debris falls AWAY from the ampulla (ampullofugal → excitatory). After a short latency the nystagmus builds — UPBEAT with torsion toward the ${S} ear — crescendos, then fades as the debris settles. A positive Dix-Hallpike.`,
     noteP:`Lying back quickly makes the loose crystals tumble through the canal — this is the moment the spinning starts, then it dies away.`};
-  if(man==='dh') return [sit, hang,
+  if(man==='dh') return [sit0, sit, hang,
     {name:'Sit back up', tau:0, headA:-90, flap:0, yaw:45, theta:0, hold:8000, roll:false,
      noteT:`Sitting up, the debris slides BACK toward the ampulla (ampullopetal → inhibitory): a briefer REVERSAL — downbeat with torsion toward the ${O} ear. Test complete: ${S.toLowerCase()} posterior-canal BPPV confirmed. (Debris is back where it started — the diagnostic test does not treat.)`,
      noteP:`Sitting up makes the crystals slide back — a second, briefer wave of spinning in the opposite direction.`}];
-  return [sit, hang,
+  return [sit0, sit, hang,
     {name:`Turn the head 90° to the ${O} (still supine)`, tau:90, headA:0, flap:10, yaw:-45, theta:-200, hold:8000, roll:false,
      noteT:`The debris advances AROUND the canal, farther from the ampulla → another burst of the same upbeat–torsional nystagmus. Same-direction nystagmus here ("orthotropic") predicts a successful Epley.`,
      noteP:`Turning the head rolls the crystals farther along the tube.`},
@@ -883,9 +887,11 @@ function buildPatientPanel(){
   el('rect', {x:120, y:252, width:522, height:14, rx:7, fill:'#b7c9dd', stroke:'#7e9cc0', 'stroke-width':1.5}, patSvg);
   P.flap = el('g', {}, patSvg);
   el('rect', {x:642, y:252, width:150, height:14, rx:7, fill:'#b7c9dd', stroke:'#7e9cc0', 'stroke-width':1.5}, P.flap);
-  P.legs  = el('path', {d:'', stroke:'#7e9cc0', 'stroke-width':26, fill:'none', 'stroke-linecap':'round', 'stroke-linejoin':'round'}, patSvg);
-  P.torso = el('line', {stroke:'#5f7fa6', 'stroke-width':38, 'stroke-linecap':'round'}, patSvg);
-  P.arm   = el('line', {stroke:'#4f6f96', 'stroke-width':13, 'stroke-linecap':'round'}, patSvg);
+  P.legs  = el('path', {d:'', stroke:'#7e9cc0', 'stroke-width':16, fill:'none', 'stroke-linecap':'round', 'stroke-linejoin':'round'}, patSvg);
+  P.feet  = el('line', {stroke:'#8a6a4f', 'stroke-width':11, 'stroke-linecap':'round'}, patSvg);
+  P.torso = el('line', {stroke:'#5f7fa6', 'stroke-width':34, 'stroke-linecap':'round'}, patSvg);
+  P.neck  = el('line', {stroke:'#f3dcc8', 'stroke-width':13, 'stroke-linecap':'round'}, patSvg);
+  P.arm   = el('line', {stroke:'#4f6f96', 'stroke-width':10, 'stroke-linecap':'round'}, patSvg);
   /* Head with three orientation states (camera is on the patient's LEFT):
      profile (yaw ≈ 0), face toward the viewer (turned LEFT: both eyes + nose),
      back of the head (turned RIGHT: no features). Local frame: crown = −y,
@@ -904,7 +910,11 @@ function buildPatientPanel(){
   el('path', {d:'M -11 18 Q -6 21 0 18', fill:'none', stroke:'#b98d6e', 'stroke-width':1.6, 'stroke-linecap':'round'}, P.faceFront);
   P.faceBack = el('g', {}, P.head);                          // turned away from the viewer
   el('circle', {cx:0, cy:-1, r:24, fill:'#8a6a4f', stroke:'#755a41', 'stroke-width':1.5}, P.faceBack);
-  el('ellipse', {cx:1, cy:4, rx:4.5, ry:7, fill:'#f3dcc8', stroke:'#d9b8a5', 'stroke-width':1.4}, P.faceBack); // left ear
+  /* the LEFT ear (camera side) — one shared element that travels with the yaw:
+     forward when the head turns away, back and down when it turns toward us */
+  P.ear = el('g', {}, P.head);
+  el('ellipse', {cx:0, cy:0, rx:4.5, ry:7.5, fill:'#eccdb0', stroke:'#d9b8a5', 'stroke-width':1.4}, P.ear);
+  el('path', {d:'M -1.5 -3 Q 1.8 0 -1 3.5', fill:'none', stroke:'#c9a385', 'stroke-width':1.2}, P.ear);
   P.ann = el('g', {}, patSvg);
   P.refLine  = el('line', {stroke:'#3d6fb4', 'stroke-width':1.6, 'stroke-dasharray':'6 5'}, P.ann);
   P.headLine = el('line', {stroke:'#e0b93c', 'stroke-width':3.4, 'stroke-linecap':'round'}, P.ann);
@@ -921,7 +931,7 @@ function buildPatientPanel(){
   el('circle', {cx:0, cy:0, r:22, fill:'#f3dcc8', stroke:'#d9b8a5', 'stroke-width':1.8}, P.yawHead);
   el('path', {d:'M -7 -20 L 0 -33 L 7 -20 Z', fill:'#f3dcc8', stroke:'#d9b8a5', 'stroke-width':1.5}, P.yawHead);
   P.yawText = el('text', {x:0, y:54, 'text-anchor':'middle', 'font-size':11.5, fill:'#5a6b7d'}, yg);
-  P.stepText = el('text', {x:460, y:26, 'text-anchor':'middle', 'font-size':16, 'font-weight':700, fill:'#1c3a5e'}, patSvg);
+  P.stepText = el('text', {x:450, y:390, 'text-anchor':'middle', 'font-size':16, 'font-weight':700, fill:'#1c3a5e'}, patSvg);
 }
 
 function updatePatient(p){
@@ -930,7 +940,9 @@ function updatePatient(p){
   const sh = [hip[0]+150*Math.cos(ta), hip[1]+150*Math.sin(ta)];
   P.torso.setAttribute('x1',hip[0]); P.torso.setAttribute('y1',hip[1]);
   P.torso.setAttribute('x2',sh[0].toFixed(1)); P.torso.setAttribute('y2',sh[1].toFixed(1));
-  P.legs.setAttribute('d', `M ${hip[0]} ${hip[1]} L 360 243 L 252 240`);
+  P.legs.setAttribute('d', `M ${hip[0]} ${hip[1]} L 360 241 L 254 238`);
+  P.feet.setAttribute('x1', 254); P.feet.setAttribute('y1', 236);
+  P.feet.setAttribute('x2', 251); P.feet.setAttribute('y2', 220);
   const ha = p.headA*Math.PI/180;
   const hc = [sh[0]+56*Math.cos(ha), sh[1]+56*Math.sin(ha)];
   const yWorld = M.side==='R' ? p.yaw : -p.yaw;
@@ -938,9 +950,14 @@ function updatePatient(p){
      torso ≈ 3 head-units) */
   P.head.setAttribute('transform',
     `translate(${hc[0].toFixed(1)},${hc[1].toFixed(1)}) rotate(${(p.headA + 90 + yWorld*0.14).toFixed(1)}) scale(1.25)`);
+  // neck joins the head to the body
+  const nk = [sh[0]+30*Math.cos(ha), sh[1]+30*Math.sin(ha)];
+  P.neck.setAttribute('x1', sh[0].toFixed(1)); P.neck.setAttribute('y1', sh[1].toFixed(1));
+  P.neck.setAttribute('x2', nk[0].toFixed(1)); P.neck.setAttribute('y2', nk[1].toFixed(1));
+  // the arm hangs down / rests along the body (never up past the head)
   P.arm.setAttribute('x1', sh[0]); P.arm.setAttribute('y1', sh[1]);
-  const aa = ta + 0.55;
-  P.arm.setAttribute('x2', (sh[0]+82*Math.cos(aa)).toFixed(1)); P.arm.setAttribute('y2', (sh[1]+82*Math.sin(aa)).toFixed(1));
+  const aa = ta + Math.PI - 0.35;
+  P.arm.setAttribute('x2', (sh[0]+78*Math.cos(aa)).toFixed(1)); P.arm.setAttribute('y2', (sh[1]+78*Math.sin(aa)).toFixed(1));
   P.flap.setAttribute('transform', `rotate(${p.flap} 642 259)`);
   const show = p.tau > 45;
   P.ann.style.display = show ? '' : 'none';
@@ -966,6 +983,10 @@ function updatePatient(p){
   P.faceFront.style.opacity   = opF;
   P.faceBack.style.opacity    = opB;
   P.faceProfile.style.opacity = cl(1 - opF - opB);
+  // the ear travels with the turn: forward when facing away, back+down when facing us
+  const yr2 = y*Math.PI/180;
+  P.ear.setAttribute('transform',
+    `translate(${(-16*Math.sin(yr2)).toFixed(1)},${(3 + 5*Math.max(0, -Math.sin(yr2))).toFixed(1)})`);
   // rolling arrow over the head while a turning transition is under way
   if(P.turnG){
     P.turnG.style.display = M.turning ? '' : 'none';
