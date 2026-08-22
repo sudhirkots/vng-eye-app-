@@ -886,11 +886,25 @@ function buildPatientPanel(){
   P.legs  = el('path', {d:'', stroke:'#7e9cc0', 'stroke-width':26, fill:'none', 'stroke-linecap':'round', 'stroke-linejoin':'round'}, patSvg);
   P.torso = el('line', {stroke:'#5f7fa6', 'stroke-width':38, 'stroke-linecap':'round'}, patSvg);
   P.arm   = el('line', {stroke:'#4f6f96', 'stroke-width':13, 'stroke-linecap':'round'}, patSvg);
-  P.head  = el('g', {}, patSvg);
+  /* Head with three orientation states (camera is on the patient's LEFT):
+     profile (yaw ≈ 0), face toward the viewer (turned LEFT: both eyes + nose),
+     back of the head (turned RIGHT: no features). Local frame: crown = −y,
+     anterior = −x, before the rotate(headA+90) below. */
+  P.head = el('g', {}, patSvg);
   el('circle', {cx:0, cy:0, r:25, fill:'#f3dcc8', stroke:'#d9b8a5', 'stroke-width':2}, P.head);
-  el('path', {d:'M -25 -4 A 25 25 0 0 1 14 -21 L 6 -5 Z', fill:'#8a6a4f'}, P.head);
-  el('path', {d:'M -25 2 L -34 8 L -24 12 Z', fill:'#f3dcc8', stroke:'#d9b8a5', 'stroke-width':1.5}, P.head);
-  el('circle', {cx:-13, cy:-2, r:2.4, fill:'#333'}, P.head);
+  P.faceProfile = el('g', {}, P.head);
+  el('path', {d:'M -25 -4 A 25 25 0 0 1 14 -21 L 6 -5 Z', fill:'#8a6a4f'}, P.faceProfile);
+  el('path', {d:'M -25 2 L -34 8 L -24 12 Z', fill:'#f3dcc8', stroke:'#d9b8a5', 'stroke-width':1.5}, P.faceProfile);
+  el('circle', {cx:-13, cy:-2, r:2.4, fill:'#333'}, P.faceProfile);
+  P.faceFront = el('g', {}, P.head);                         // turned toward the viewer
+  el('path', {d:'M -24.5 -5 A 25 25 0 0 1 24.5 -5 Q 0 -19 -24.5 -5 Z', fill:'#8a6a4f'}, P.faceFront);
+  el('circle', {cx:-13, cy:3, r:2.6, fill:'#333'}, P.faceFront);
+  el('circle', {cx:-1, cy:3, r:2.6, fill:'#333'}, P.faceFront);
+  el('path', {d:'M -9 7 L -6 14 L -3 8 Z', fill:'#e8c9ac', stroke:'#d9b8a5', 'stroke-width':1}, P.faceFront);
+  el('path', {d:'M -11 18 Q -6 21 0 18', fill:'none', stroke:'#b98d6e', 'stroke-width':1.6, 'stroke-linecap':'round'}, P.faceFront);
+  P.faceBack = el('g', {}, P.head);                          // turned away from the viewer
+  el('circle', {cx:0, cy:-1, r:24, fill:'#8a6a4f', stroke:'#755a41', 'stroke-width':1.5}, P.faceBack);
+  el('ellipse', {cx:1, cy:4, rx:4.5, ry:7, fill:'#f3dcc8', stroke:'#d9b8a5', 'stroke-width':1.4}, P.faceBack); // left ear
   P.ann = el('g', {}, patSvg);
   P.refLine  = el('line', {stroke:'#3d6fb4', 'stroke-width':1.6, 'stroke-dasharray':'6 5'}, P.ann);
   P.headLine = el('line', {stroke:'#e0b93c', 'stroke-width':3.4, 'stroke-linecap':'round'}, P.ann);
@@ -899,6 +913,8 @@ function buildPatientPanel(){
   P.rollG = el('g', {}, patSvg);
   el('path', {d:'M 470 150 A 62 62 0 0 1 588 146', fill:'none', stroke:'#e2543a', 'stroke-width':4, 'marker-end':'url(#ahFast)'}, P.rollG);
   P.rollText = el('text', {x:525, y:128, 'text-anchor':'middle', 'font-size':13.5, 'font-weight':600, fill:'#e2543a'}, P.rollG);
+  P.turnG = el('g', {}, patSvg);                              // rolling arrow shown during head turns
+  el('path', {d:'M -26 4 A 27 15 0 0 1 26 -2', fill:'none', stroke:'#e2543a', 'stroke-width':3.4, 'marker-end':'url(#ahFast)'}, P.turnG);
   const yg = el('g', {transform:'translate(86,88)'}, patSvg);
   el('circle', {cx:0, cy:0, r:35, fill:'#f7fafc', stroke:'#dde4ec', 'stroke-width':1.5}, yg);
   P.yawHead = el('g', {}, yg);
@@ -917,7 +933,9 @@ function updatePatient(p){
   P.legs.setAttribute('d', `M ${hip[0]} ${hip[1]} L 330 243 L 206 240`);
   const ha = p.headA*Math.PI/180;
   const hc = [sh[0]+48*Math.cos(ha), sh[1]+48*Math.sin(ha)];
-  P.head.setAttribute('transform', `translate(${hc[0].toFixed(1)},${hc[1].toFixed(1)}) rotate(${(p.headA+90).toFixed(1)})`);
+  const yWorld = M.side==='R' ? p.yaw : -p.yaw;
+  P.head.setAttribute('transform',
+    `translate(${hc[0].toFixed(1)},${hc[1].toFixed(1)}) rotate(${(p.headA + 90 + yWorld*0.14).toFixed(1)})`);
   P.arm.setAttribute('x1', sh[0]); P.arm.setAttribute('y1', sh[1]);
   const aa = ta + 0.55;
   P.arm.setAttribute('x2', (sh[0]+82*Math.cos(aa)).toFixed(1)); P.arm.setAttribute('y2', (sh[1]+82*Math.sin(aa)).toFixed(1));
@@ -935,9 +953,23 @@ function updatePatient(p){
     P.deg.setAttribute('x', nx+r+8); P.deg.setAttribute('y', ny + (p.headA>0 ? 30 : -12));
     P.deg.textContent = Math.round(Math.abs(p.headA)) + '°';
   }
-  const y = M.side==='R' ? p.yaw : -p.yaw;
+  const y = M.side==='R' ? p.yaw : -p.yaw;      // world yaw: + = toward the patient's RIGHT
   P.yawHead.setAttribute('transform', `rotate(${y.toFixed(1)})`);
   P.yawText.textContent = Math.abs(p.yaw) < 3 ? 'head straight' : `head ${Math.round(Math.abs(p.yaw))}° ${y>0?'right':'left'}`;
+  /* camera sits on the patient's LEFT: turned left → face toward viewer;
+     turned right → back of the head; near 0 → profile. Crossfaded so the
+     head visibly ROLLS through the turn rather than snapping. */
+  const cl = v => Math.max(0, Math.min(1, v));
+  const opF = cl((-y - 8) / 30), opB = cl((y - 8) / 30);
+  P.faceFront.style.opacity   = opF;
+  P.faceBack.style.opacity    = opB;
+  P.faceProfile.style.opacity = cl(1 - opF - opB);
+  // rolling arrow over the head while a turning transition is under way
+  if(P.turnG){
+    P.turnG.style.display = M.turning ? '' : 'none';
+    if(M.turning) P.turnG.setAttribute('transform',
+      `translate(${hc[0].toFixed(1)},${(hc[1]-46).toFixed(1)}) scale(${M.turnDir < 0 ? -1 : 1},1)`);
+  }
   P.rollG.style.display = p.roll ? '' : 'none';
   if(p.roll) P.rollText.textContent = `roll body to the ${M.side==='R'?'LEFT':'RIGHT'}`;
 }
@@ -1059,7 +1091,10 @@ function maneuverTick(dtMs){
     M.t += dtMs * (M.slow ? 0.45 : 1);
     const k = easeIO(Math.min(1, M.t/TWEEN_MS));
     M.pose = lerpPose(M.from, M.to, k);
-    if(M.t >= TWEEN_MS){ M.phase = 'hold'; M.t = 0; M.pose = {...M.to}; }
+    const dyaw = (M.to.yaw - M.from.yaw) * (M.side==='R' ? 1 : -1);
+    M.turning = Math.abs(dyaw) > 10;
+    M.turnDir = Math.sign(dyaw);
+    if(M.t >= TWEEN_MS){ M.phase = 'hold'; M.t = 0; M.pose = {...M.to}; M.turning = false; }
   } else if(M.playing){
     M.t += dtMs * (M.slow ? 0.45 : 1);
     if(M.t >= st.hold && M.idx < M.steps.length-1) enterStep(M.idx+1, false);
