@@ -527,10 +527,17 @@ function buildHead(){
       const qa = g.a0*Math.PI/180;
       const px = g.r*Math.cos(qa), py = g.fy*g.r*Math.sin(qa);
       const tang = Math.atan2(g.fy*g.r*Math.cos(qa), -g.r*Math.sin(qa)) * 180/Math.PI;
+      /* AMPULLA = fusiform dilation of the canal itself: the duct (entering at
+         local −x) swells smoothly and opens toward the vestibule (+x); the
+         CUPULA stretches wall-to-wall across the lumen, sealing it. */
       const gAmp = el('g', {transform:`translate(${px.toFixed(1)},${py.toFixed(1)}) rotate(${tang.toFixed(1)})`}, gOuter);
-      el('ellipse', {cx:0, cy:0, rx:11, ry:7, class:'ampulla', id:'amp'+id}, gAmp);
-      el('line', {x1:2.8, y1:-5.2, x2:2.8, y2:5.2, stroke:'#b06a55', 'stroke-width':1.6, 'stroke-linecap':'round'}, gAmp); // cupula
-      const atip = el('title', {}, gAmp); atip.textContent = 'Ampulla — the cupula (flap) inside is deflected by endolymph flow';
+      el('path', {d:'M -18 -5 C -9 -11.5, 8 -11.5, 15 -6 L 15 6 C 8 11.5, -9 11.5, -18 5 Z',
+                  fill:'#ecd3c9', stroke:'#d9b8ab', 'stroke-width':1}, gAmp);              // bony shell dilates too
+      el('path', {d:'M -16 -2.75 C -8 -8.2, 6 -8.2, 12 -4 L 12 4 C 6 8.2, -8 8.2, -16 2.75 Z',
+                  class:'ampulla', id:'amp'+id}, gAmp);                                    // membranous dilation
+      el('path', {d:'M 0 -7.6 Q -4.5 0 0 7.6', fill:'none', stroke:'#3f9e57',
+                  'stroke-width':2.4, 'stroke-linecap':'round'}, gAmp);                    // cupula seals the lumen
+      const atip = el('title', {}, gAmp); atip.textContent = 'Ampulla — the dilated segment of the canal; the cupula spans the whole lumen (fluid cannot pass, it only deflects the cupula)';
       gOuter.addEventListener('click', ()=>selectCanal(id));
       // label (NOT mirrored) — sits in the loop's hollow, as in anatomical figures
       const lx = lab.x + lab.m*g.lblAt[0], ly = lab.y + g.lblAt[1] + 4;
@@ -760,8 +767,10 @@ function buildOrbits(){
     {
       const g = el('g', {class:'musGrp', id:`orb${eye}MR`}, orbitSvg);
       const tip = el('title', {}, g); tip.textContent = MUSCLE_NAMES.MR;
-      const Ie = [cx + n*35, gy - 23];                     // band end, inside the rim
-      el('path', {d:`M ${apex[0]} ${apex[1]-8} Q ${cx+n*66} 205 ${Ie[0]} ${Ie[1]}`, class:'mStroke', style:'stroke-width:11'}, g);
+      /* the band runs tangent along the globe's medial surface, then wraps
+         onto the front to insert — visibly attached the whole way */
+      el('path', {d:`M ${apex[0]} ${apex[1]-8} Q ${cx+n*62} ${gy+52} ${cx+n*50} ${gy} Q ${cx+n*46} ${gy-16} ${cx+n*33} ${gy-27}`,
+                  class:'mStroke', style:'stroke-width:11'}, g);
       const Ip = [cx + n*40.3, gy - 26.2];                 // insertion line on the globe rim
       el('rect', {x:Ip[0]-9, y:Ip[1]-2.5, width:18, height:5, rx:2.5, class:'mFill', transform:`rotate(${n*57} ${Ip[0]} ${Ip[1]})`}, g);
       olbl(eye, 'MR', cx + n*74, 132);
@@ -771,8 +780,8 @@ function buildOrbits(){
     {
       const g = el('g', {class:'musGrp', id:`orb${eye}LR`}, orbitSvg);
       const tip = el('title', {}, g); tip.textContent = MUSCLE_NAMES.LR;
-      const Ie = [cx - n*35, gy - 23];
-      el('path', {d:`M ${apex[0]-n*10} ${apex[1]-8} Q ${cx-n*70} 213 ${Ie[0]} ${Ie[1]}`, class:'mStroke', style:'stroke-width:11'}, g);
+      el('path', {d:`M ${apex[0]-n*10} ${apex[1]-8} Q ${cx-n*66} ${gy+58} ${cx-n*50} ${gy} Q ${cx-n*46} ${gy-16} ${cx-n*33} ${gy-27}`,
+                  class:'mStroke', style:'stroke-width:11'}, g);
       const Ip = [cx - n*40.3, gy - 26.2];
       el('rect', {x:Ip[0]-9, y:Ip[1]-2.5, width:18, height:5, rx:2.5, class:'mFill', transform:`rotate(${-n*57} ${Ip[0]} ${Ip[1]})`}, g);
       olbl(eye, 'LR', cx - n*84, 150);
@@ -1058,12 +1067,15 @@ function buildLabPanel(){
   el('line', {x1:p1[0], y1:p1[1], x2:L.utr[0]+30, y2:L.utr[1]-16, stroke:'#9fbfdc', 'stroke-width':7, 'stroke-linecap':'round'}, L.rot);
   el('line', {x1:p0[0], y1:p0[1], x2:L.utr[0]-30, y2:L.utr[1]-16, stroke:'#ecd3c9', 'stroke-width':17, 'stroke-linecap':'round'}, L.rot);
   el('line', {x1:p0[0], y1:p0[1], x2:L.utr[0]-30, y2:L.utr[1]-16, stroke:'#9fbfdc', 'stroke-width':7, 'stroke-linecap':'round'}, L.rot);
-  el('ellipse', {cx:p0[0], cy:p0[1], rx:19, ry:12, fill:'#cfe0ee', stroke:'#8fb0c9', 'stroke-width':1.6,
-                 transform:`rotate(45 ${p0[0]} ${p0[1]})`}, L.rot);                      // ampulla
-  const c0 = [CX+R*Math.cos(q(128)), CY+R*Math.sin(q(128))];
-  el('line', {x1:CX+(R-10)*Math.cos(q(128)), y1:CY+(R-10)*Math.sin(q(128)),
-              x2:CX+(R+10)*Math.cos(q(128)), y2:CY+(R+10)*Math.sin(q(128)),
-              stroke:'#3f9e57', 'stroke-width':3.5, 'stroke-linecap':'round'}, L.rot);   // cupula (green)
+  /* ampulla = the canal itself dilating before it opens into the vestibule;
+     cupula spans the whole lumen (green diaphragm) */
+  const gA2 = el('g', {transform:`translate(${p0[0].toFixed(1)},${p0[1].toFixed(1)}) rotate(45)`}, L.rot);
+  el('path', {d:'M -30 -7.5 C -15 -18, 12 -18, 24 -9 L 24 9 C 12 18, -15 18, -30 7.5 Z',
+              fill:'#ecd3c9', stroke:'#d9b8ab', 'stroke-width':1}, gA2);
+  el('path', {d:'M -27 -4.5 C -13 -13, 9 -13, 19 -6.5 L 19 6.5 C 9 13, -13 13, -27 4.5 Z',
+              fill:'#cfe0ee', stroke:'#8fb0c9', 'stroke-width':1.6}, gA2);
+  el('path', {d:'M 0 -12 Q -7 0 0 12', fill:'none', stroke:'#3f9e57',
+              'stroke-width':3.2, 'stroke-linecap':'round'}, gA2);
   L.debris = el('g', {}, L.rot);
   L.dots = [];
   for(let i=0;i<4;i++) L.dots.push(el('circle', {r:4.5, fill:'#e59b3f', stroke:'#b06f1e', 'stroke-width':1.2}, L.debris));
