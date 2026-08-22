@@ -700,11 +700,13 @@ function buildOrbits(){
     // posterolateral insertion (dashed = below the globe)
     {
       const g = el('g', {class:'musGrp', id:`orb${eye}IO`}, orbitSvg);
-      const tip = el('title', {}, g); tip.textContent = MUSCLE_NAMES.IO + ' — runs beneath the globe (~51° to the optical axis); inserts posterolaterally near the macula';
-      const O = [cx + n*46, 96];
-      el('circle', {cx:O[0], cy:O[1], r:3.5, fill:'#8a94a0'}, g);
+      const tip = el('title', {}, g); tip.textContent = MUSCLE_NAMES.IO + ' — arises from the anteromedial orbital FLOOR just inside the rim (marked on bone); runs ~51° beneath the globe to insert posterolaterally, near the macula';
+      // origin sits ON bone: a stub of the anteromedial floor continuous with the medial wall
+      el('line', {x1:cx+n*62, y1:78, x2:cx+n*50, y2:94, stroke:'#dcd2bf', 'stroke-width':9, 'stroke-linecap':'round'}, g);
+      const O = [cx + n*49, 95];
+      el('circle', {cx:O[0], cy:O[1], r:4.5, fill:'#8a94a0'}, g);
       const I = [cx - n*30, gy + 26];
-      el('path', {d:`M ${O[0]} ${O[1]} Q ${cx} ${gy+40} ${I[0]} ${I[1]}`, class:'mStroke', 'stroke-dasharray':'4 5', style:'stroke-width:5'}, g);
+      el('path', {d:`M ${O[0]} ${O[1]} Q ${cx + n*4} ${gy+46} ${I[0]} ${I[1]}`, class:'mStroke', 'stroke-dasharray':'4 5', style:'stroke-width:5'}, g);
       el('rect', {x:I[0]-8, y:I[1]-2.5, width:16, height:5, rx:2.5, class:'mFill', transform:`rotate(${n*50} ${I[0]} ${I[1]})`}, g);
       olbl(eye, 'IO', cx - n*58, gy + 44);
     }
@@ -715,22 +717,27 @@ function buildOrbits(){
       el('path', {d:`M ${apex[0]-n*2} ${apex[1]-6} Q ${cx+n*40} 216 ${cx+n*8} ${gy-30}`, class:'mStroke', 'stroke-dasharray':'4 5', style:'stroke-width:6'}, g);
       olbl(eye, 'IR', cx - n*8, 340);
     }
-    // MR — along the medial wall to an anteromedial insertion
+    // MR — along the medial wall, inserting ON the globe just anterior to the
+    // medial equator (the band ends inside the outline so the attachment is
+    // unmistakable; the pad marks the insertion line on the rim)
     {
       const g = el('g', {class:'musGrp', id:`orb${eye}MR`}, orbitSvg);
       const tip = el('title', {}, g); tip.textContent = MUSCLE_NAMES.MR;
-      const I = [cx + n*30, gy - 38];
-      el('path', {d:`M ${apex[0]} ${apex[1]-8} Q ${cx+n*62} 200 ${I[0]} ${I[1]}`, class:'mStroke', style:'stroke-width:11'}, g);
-      el('rect', {x:I[0]-9, y:I[1]-2.5, width:18, height:5, rx:2.5, class:'mFill', transform:`rotate(${-n*38} ${I[0]} ${I[1]})`}, g);
+      const Ie = [cx + n*35, gy - 23];                     // band end, inside the rim
+      el('path', {d:`M ${apex[0]} ${apex[1]-8} Q ${cx+n*66} 205 ${Ie[0]} ${Ie[1]}`, class:'mStroke', style:'stroke-width:11'}, g);
+      const Ip = [cx + n*40.3, gy - 26.2];                 // insertion line on the globe rim
+      el('rect', {x:Ip[0]-9, y:Ip[1]-2.5, width:18, height:5, rx:2.5, class:'mFill', transform:`rotate(${n*57} ${Ip[0]} ${Ip[1]})`}, g);
       olbl(eye, 'MR', cx + n*74, 132);
     }
-    // LR — along the lateral wall to an anterotemporal insertion
+    // LR — along the lateral wall, inserting ON the globe just anterior to the
+    // lateral equator
     {
       const g = el('g', {class:'musGrp', id:`orb${eye}LR`}, orbitSvg);
       const tip = el('title', {}, g); tip.textContent = MUSCLE_NAMES.LR;
-      const I = [cx - n*30, gy - 38];
-      el('path', {d:`M ${apex[0]-n*10} ${apex[1]-8} Q ${cx-n*68} 210 ${I[0]} ${I[1]}`, class:'mStroke', style:'stroke-width:11'}, g);
-      el('rect', {x:I[0]-9, y:I[1]-2.5, width:18, height:5, rx:2.5, class:'mFill', transform:`rotate(${n*38} ${I[0]} ${I[1]})`}, g);
+      const Ie = [cx - n*35, gy - 23];
+      el('path', {d:`M ${apex[0]-n*10} ${apex[1]-8} Q ${cx-n*70} 213 ${Ie[0]} ${Ie[1]}`, class:'mStroke', style:'stroke-width:11'}, g);
+      const Ip = [cx - n*40.3, gy - 26.2];
+      el('rect', {x:Ip[0]-9, y:Ip[1]-2.5, width:18, height:5, rx:2.5, class:'mFill', transform:`rotate(${-n*57} ${Ip[0]} ${Ip[1]})`}, g);
       olbl(eye, 'LR', cx - n*84, 150);
     }
     // SO — along the medial wall above MR to the trochlea, then reflected
