@@ -462,6 +462,32 @@ function arcPath(r, a0, a1, sweep){
   return `M ${p0[0].toFixed(1)} ${p0[1].toFixed(1)} A ${r} ${r} 0 1 ${sweep} ${p1[0].toFixed(1)} ${p1[1].toFixed(1)}`;
 }
 
+/* COMMON-CRUS GEOMETRY (labyrinth-local coordinates, left side).
+   The vertical canals do not stop at the vestibule: each non-ampullary limb
+   CONTINUES as a curved tail, and the two tails CONVERGE at the junction
+   CRUS_J, where their walls combine. From CRUS_J one combined, dead-straight
+   pipe — the common crus — runs to CRUS_V, opening into the utricle.
+   The tails are appended to the canal paths themselves (crusTailPath), so
+   canal wall and crus wall are literally one continuous stroke. */
+const CRUS_J = [21, 23];                       // junction: AC + PC walls fuse here
+const CRUS_V = [10, 7];                        // mouth of the crus, inside the utricle
+const CRUS_TAILS = {                           // bezier control points, labyrinth frame
+  A: [[8, -28], [27, -2]],                     // AC limb arches over the vestibule, descends onto J
+  P: [[10, 38], [20, 33]],                     // PC limb curls medially, ascends onto J
+};
+/* labyrinth-frame point -> a canal's local (rotated, un-flattened) path frame */
+function labToCanal(g, q){
+  const t = -g.rot*Math.PI/180;
+  const dx = q[0]-g.ox, dy = q[1]-g.oy;
+  return [dx*Math.cos(t) - dy*Math.sin(t), (dx*Math.sin(t) + dy*Math.cos(t))/g.fy];
+}
+function crusTailPath(k){
+  if(!(k in CRUS_TAILS)) return '';
+  const g = CANAL_GEOM[k];
+  const pts = [...CRUS_TAILS[k], CRUS_J].map(q => labToCanal(g, q));
+  return ' C ' + pts.map(pt => `${pt[0].toFixed(1)} ${pt[1].toFixed(1)}`).join(', ');
+}
+
 function buildHead(){
   // head outline
   el('ellipse', {cx:260, cy:235, rx:172, ry:185, fill:'#faf5ef', stroke:'#c9bfae', 'stroke-width':2}, headSvg);
@@ -489,29 +515,25 @@ function buildHead(){
     el('ellipse', {cx:lab.x, cy:lab.y, rx:19, ry:25, fill:'#ecd3c9', stroke:'#d9b8ab', 'stroke-width':1}, headSvg);
     const ves = el('ellipse', {cx:lab.x, cy:lab.y, rx:14, ry:19.5, fill:'#cfe0ee', stroke:'#9db8ce', 'stroke-width':1.2}, headSvg);
     const vtip = el('title', {}, ves); vtip.textContent = 'Vestibule — utricle & saccule (the otolith organs; source of the loose otoconia in BPPV)';
-    const ut = el('text', {x:lab.x + lab.m*24, y:lab.y - 2, 'font-size':10, fill:'#8296ab',
+    const ut = el('text', {x:lab.x + lab.m*30, y:lab.y - 2, 'font-size':10, fill:'#8296ab',
                            'text-anchor': lab.m===1 ? 'start' : 'end'}, headSvg);
     ut.textContent = 'utricle';
-    /* COMMON CRUS: the non-ampullary arms of AC and PC merge into one medial
-       stem that enters the vestibule (drawn beneath the canals) */
+    /* COMMON CRUS: the vertical canals' tails (appended to the canal paths —
+       see crusTailPath) stay curved and converge at CRUS_J, where the walls
+       combine; from there ONE combined, dead-STRAIGHT pipe opens into the
+       utricle. Bony wall here (under the canals); merged lumen drawn after
+       the canals so the tails' lumens flow into it. */
+    const crusPath = `M ${CRUS_J[0]} ${CRUS_J[1]} L ${CRUS_V[0]} ${CRUS_V[1]}`;   // ONE straight segment
     {
       const gCrus = el('g', {transform:`translate(${lab.x},${lab.y}) scale(${lab.m},1)`}, headSvg);
       const ctip = el('title', {}, gCrus);
-      ctip.textContent = 'Common crus — the shared trunk of the AC and PC non-ampullary arms, entering the vestibule';
-      const eA = canalEndLocal(CANAL_GEOM.A, 32);          // AC non-ampullary end
-      const eP = canalEndLocal(CANAL_GEOM.P, 32);          // PC non-ampullary end
-      const branches = [
-        `M ${eA[0].toFixed(1)} ${eA[1].toFixed(1)} Q 8 -30 24 24`,   // AC arm sweeps medially down…
-        `M ${eP[0].toFixed(1)} ${eP[1].toFixed(1)} Q 15 37 24 32`,   // …PC arm sweeps medially up…
-        `M 24 22 L 24 34 L 11 17`,                                   // …joining in ONE stem into the vestibule
-      ];
-      for(const d of branches) el('path', {d, stroke:'#ecd3c9', 'stroke-width':13, fill:'none', 'stroke-linecap':'round'}, gCrus);
-      for(const d of branches) el('path', {d, stroke:'#9fbfdc', 'stroke-width':5.5, fill:'none', 'stroke-linecap':'round'}, gCrus);
+      ctip.textContent = 'Common crus — the walls of the AC and PC non-ampullary limbs fuse at one junction into a single STRAIGHT pipe that opens into the utricle';
+      el('path', {d:crusPath, stroke:'#ecd3c9', 'stroke-width':14.5, fill:'none', 'stroke-linecap':'round'}, gCrus); // combined wall → wider bore
     }
     if(lab.m === 1){                                       // label once (mirrored structure on the right)
-      const cc = el('text', {x:lab.x + 44, y:lab.y + 42, 'font-size':9.5, fill:'#8296ab'}, headSvg);
+      const cc = el('text', {x:lab.x + 36, y:lab.y + 45, 'font-size':9.5, fill:'#8296ab'}, headSvg);
       cc.textContent = 'common crus';
-      el('line', {x1:lab.x + 42, y1:lab.y + 38, x2:lab.x + 27, y2:lab.y + 29,
+      el('line', {x1:lab.x + 34, y1:lab.y + 41, x2:lab.x + 23, y2:lab.y + 27,
                   stroke:'#8296ab', 'stroke-width':1, opacity:.8}, headSvg);
     }
     for(const k of ['A','H','P']){
@@ -522,7 +544,7 @@ function buildHead(){
       const gtip = el('title', {}, gOuter);
       gtip.textContent = CANALS[id].label + ' canal — the ampullary arm ends in the dilated ampulla at the vestibule; the non-ampullary arm returns to the vestibule' + (k==='H' ? '' : ' (via the common crus)');
       const gFlat = el('g', {transform:`scale(1,${g.fy})`}, gOuter);
-      const d = arcPath(g.r, g.a0, g.a1, g.sweep);
+      const d = arcPath(g.r, g.a0, g.a1, g.sweep) + crusTailPath(k);   // vertical canals continue into the crus junction
       el('path', {d, class:'canalBony'}, gFlat);                  // bony canal
       el('path', {d, class:'canalTube', id:'tube'+id}, gFlat);    // membranous duct
       el('path', {d, class:'flowDash', id:'flow'+id}, gFlat);
@@ -546,6 +568,24 @@ function buildHead(){
       const t = el('text', {x:lx, y:ly, class:'canalLabel', id:'lbl'+id, 'text-anchor':'middle'}, headSvg);
       t.textContent = k + 'C';
       t.addEventListener('click', ()=>selectCanal(id));
+    }
+    /* the crus LUMEN goes on top of the canal tails: the two lumens visibly
+       merge at the junction and continue as one straight, wider lumen */
+    {
+      const gLum = el('g', {transform:`translate(${lab.x},${lab.y}) scale(${lab.m},1)`}, headSvg);
+      const ltip = el('title', {}, gLum);
+      ltip.textContent = 'Common crus — the combined AC + PC lumen, one straight pipe into the utricle';
+      /* the last stretch of each tail's lumen, so neither lumen is masked by
+         the other canal's bony wall where they meet */
+      for(const k of ['A','P']){
+        const g = CANAL_GEOM[k];
+        const p0 = canalEndLocal(g, g.a1), [c1, c2] = CRUS_TAILS[k], p3 = CRUS_J;
+        const t = 0.9, u = 1-t, b = [u*u*u, 3*u*u*t, 3*u*t*t, t*t*t];
+        const q = [0,1].map(i => b[0]*p0[i] + b[1]*c1[i] + b[2]*c2[i] + b[3]*p3[i]);
+        el('path', {d:`M ${q[0].toFixed(1)} ${q[1].toFixed(1)} L ${p3[0]} ${p3[1]}`,
+                    stroke:'#9fbfdc', 'stroke-width':5.5, fill:'none', 'stroke-linecap':'round'}, gLum);
+      }
+      el('path', {d:crusPath, stroke:'#9fbfdc', 'stroke-width':6.8, fill:'none', 'stroke-linecap':'round'}, gLum);
     }
     // small 'amp' marker beside each ampulla, so all six are identifiable at a glance
     for(const k of ['A','H','P']){
