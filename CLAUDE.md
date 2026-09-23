@@ -21,6 +21,8 @@ ends it with "Let's end", from either machine.
    - `git log --oneline -10` + `git status --short` + `git tag -l "checkpoint/*"`;
    - *legacy/history only if needed:* `HANDOFF_*.md`, `EYE_VNG_DEVELOPMENT_HISTORY.md`,
      `docs/RIT_STRATEGY_AND_ROADMAP.md` (these describe the retired iris-tracking track).
+   - **If the work is the Balance Band** (see the section below): read **`balance_band/HANDOFF.md`** and
+     **`balance_band/README.md`** instead of the nystagmus files.
 3. Give a short accurate summary of where things stand, then **wait for the instruction.**
    ("Let's begin" reconstructs the WORK STATE from these files — not this literal chat transcript.)
 
@@ -32,6 +34,17 @@ ends it with "Let's end", from either machine.
    pull/rebase and retry, or report honestly.
 
 **Only "Let's end" authorizes committing/pushing.** At all other times, still no commit without an explicit OK.
+
+## Second project in this repo — Balance Band (Dr. K, 2026-09-23)
+
+A **separate project** from the nystagmus detector, kept in `balance_band/` for now: a motion sensor (IMU) on a
+belt over the lower back + a Chrome recording app + analysis, for a five-step standing balance test (limits of
+stability; eyes open/closed on firm floor and on foam) that reports sensory ratios (somatosensory / visual /
+vestibular) to focus rehabilitation. It has **nothing to do with nystagmus**; the nystagmus rules below do not
+apply to it. Work happens on branch **`claude/balance-angular-posturography-pae9k5`** (not yet merged).
+**Start from `balance_band/HANDOFF.md`** (state, decisions, what is/isn't verified, next steps), then
+`balance_band/README.md`. Update `balance_band/HANDOFF.md` at "Let's end" when balance-band work was done.
+Patient recordings live outside the repo (`~/BalanceBand/sessions`) — never commit them.
 
 ## Checkpoints — named locked stages (Dr. K, 2026-07-04)
 
