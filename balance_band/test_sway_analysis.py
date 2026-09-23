@@ -102,6 +102,42 @@ def test_unknown_site_rejected():
     raise AssertionError("site='head' should be rejected")
 
 
+def test_band_orientation_found_automatically():
+    # the same person, band strapped on straight vs at a random angle -> the same result
+    d_straight, d_tilted = Path(tempfile.mkdtemp()), Path(tempfile.mkdtemp())
+    S.write_demo("backward", d_straight); S.write_demo("backward", d_tilted, tilted=True)
+    r1, r2 = S.analyse_session(d_straight), S.analyse_session(d_tilted)
+    assert r2["axes"]["method"].startswith("found automatically")
+    for d in S.DIRS:
+        assert abs(r1["los"]["limits_deg"][d] - r2["los"]["limits_deg"][d]) < 0.2
+    assert r1["overall"] == r2["overall"]
+    assert r2["trials"]["ec_foam"]["fall_direction"] == "backward"
+
+
+def test_no_phase_labels_means_assumed_axes_with_warning():
+    d = _session("normal")
+    rows = list(csv.DictReader(open(d / "los.csv")))
+    with open(d / "los.csv", "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=[k for k in rows[0] if k != "phase"]); w.writeheader()
+        for r in rows:
+            r.pop("phase"); w.writerow(r)
+    r = S.analyse_session(d)
+    assert r["axes"]["method"].startswith("ASSUMED")
+    assert any("orientation NOT known" in c for c in r["caveats"])
+
+
+def test_wrong_lean_order_is_flagged():
+    d = _session("normal")
+    rows = list(csv.DictReader(open(d / "los.csv")))
+    swap = {"left": "right", "right": "left"}                      # person leaned right when told left
+    for r in rows:
+        r["phase"] = swap.get(r["phase"], r["phase"])
+    with open(d / "los.csv", "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=list(rows[0])); w.writeheader(); w.writerows(rows)
+    r = S.analyse_session(d)
+    assert any("did not point where expected" in c for c in r["caveats"])
+
+
 def test_missing_everything_is_insufficient():
     r = S.analyse_session(Path(tempfile.mkdtemp()))
     assert r["overall"].startswith("INSUFFICIENT")

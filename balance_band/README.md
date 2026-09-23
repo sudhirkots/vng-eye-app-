@@ -76,14 +76,43 @@ Roughly ₹3,000–3,500 per unit, plus the foam pad once.
 **Safety:** protected LiPo cells only; never use a swollen or dented cell; charge on a table, not while
 worn.
 
-## Run it
+## The software
+Four parts, all in this folder:
+
+| Part | File | Status |
+|------|------|--------|
+| **Firmware** on the band | `firmware/balance_band_fw/` (setup in `firmware/README.md`) | Written; **not yet compiled or run on a board** |
+| **Recording app** (Chrome page + small local server) | `recorder/` | Tested end-to-end with the simulated band |
+| **Analysis** | `sway_analysis.py` | Tested on made-up recordings |
+| **Tests** | `test_sway_analysis.py`, `recorder/test_server.py`, `recorder/test_protocol.js` | 20 + 3 + 4 pass |
+
+### Recording a session
+1. Switch the band on and strap it over the lower back — **any way round**; the software works out its
+   orientation from step 1.
+2. Start the recorder: double-click **`Start_Recorder.bat`** (Windows), or run
+   `python balance_band/recorder/server.py`. It opens `http://localhost:8765`; use **Chrome or Edge**.
+3. **Connect band** (or **Use simulated band** to practise without hardware).
+4. Type the person's **ID code (not their name)**, press **New session**.
+5. For each of the five steps: read the instruction to the person, press **Start recording**; after a
+   3-second count the screen guides them (step 1 shows *Stand still → Lean forward → centre → Lean backward
+   → …*). Press **LOST BALANCE** (or the **space bar**) if they step, grab or have to be caught.
+6. **Analyse session** shows the report. Everything is saved in `~/BalanceBand/sessions/<ID>_<date-time>/`
+   (five CSV files, `report.txt`, `result.json`) — outside the code folder, so patient data never goes to git.
+
+### How the band's orientation is found
+In step 1 the app labels every sample with the instruction on screen. The analysis takes **"down"** from the
+opening quiet stance and **"forward"** from the forward lean, and checks that the backward, left and right
+leans point where they should. If they don't (e.g. the person leaned right when told left), the report says
+so. Strapped straight or at any angle, the result is the same (tested).
+
+### Analysis only (e.g. on saved sessions)
 ```
-python balance_band/sway_analysis.py <session_folder> --site waist --forward +x --left +y --json result.json
-python balance_band/sway_analysis.py <empty_folder> --demo backward       # synthetic example
-python balance_band/test_sway_analysis.py                                  # 17 tests
+python balance_band/sway_analysis.py <session_folder> --json result.json
+python balance_band/sway_analysis.py <empty_folder> --demo backward --demo-tilted   # made-up example
+python balance_band/test_sway_analysis.py
 ```
-`--forward` / `--left` say which sensor axis points to the person's front and to the person's left.
-Needs only Python + numpy.
+Without step labels (older recordings) give `--forward` / `--left` (sensor axes, e.g. `+x`, `-z`);
+otherwise +x forward / +y left is assumed and the report warns. Needs Python 3 + numpy.
 
 ## Honest limits
 - **Thresholds are PROVISIONAL**, until we record healthy controls on this band:
@@ -99,8 +128,8 @@ Needs only Python + numpy.
   fully, so a small limit can mean "would not" as well as "could not".
 
 ## Next steps
-1. Finalise the case (Claude Design), print it, build the waist band, write the firmware and the recording
-   app, confirm the axis directions and sample rate, and record a session on myself.
+1. Build the band, load the firmware, check it streams 100 samples/s to the recorder, and record a
+   session on myself.
 2. Record healthy age-matched controls → replace the provisional thresholds with real limits.
 3. Record people who feel unsteady and known patient groups (vestibular loss, neuropathy, cerebellar,
    parkinsonism ON and OFF medication, older fallers) → check that each gives the expected pattern.

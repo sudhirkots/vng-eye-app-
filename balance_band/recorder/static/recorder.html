@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Balance Band Recorder</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#1d2433; --muted:#5b6475; --line:#d9dde5;
+          --accent:#1f5fbf; --ok:#1d7a46; --warn:#b26a00; --stop:#c62828; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:16px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; background:var(--bg); color:var(--ink); }
+  header { display:flex; flex-wrap:wrap; gap:12px; align-items:center; padding:12px 20px; background:var(--card);
+           border-bottom:1px solid var(--line); }
+  header h1 { font-size:18px; margin:0 16px 0 0; }
+  main { display:grid; grid-template-columns: 320px 1fr; gap:16px; padding:16px 20px; max-width:1200px; margin:auto; }
+  @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; }
+  .card h2 { font-size:15px; margin:0 0 10px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+  button { font:inherit; padding:8px 14px; border-radius:8px; border:1px solid var(--line); background:#fff; cursor:pointer; }
+  button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  button:disabled { opacity:.45; cursor:default; }
+  input, select { font:inherit; padding:7px 9px; border:1px solid var(--line); border-radius:8px; }
+  .dot { width:10px; height:10px; border-radius:50%; background:#aab; display:inline-block; margin-right:6px; }
+  .dot.on { background:var(--ok); }
+  #steps { list-style:none; padding:0; margin:0; }
+  #steps li { display:flex; justify-content:space-between; align-items:center; padding:10px 12px; margin-bottom:6px;
+              border:1px solid var(--line); border-radius:8px; cursor:pointer; }
+  #steps li.sel { border-color:var(--accent); box-shadow: 0 0 0 2px #1f5fbf33; }
+  #steps li .st { font-size:13px; color:var(--muted); }
+  #steps li.done .st { color:var(--ok); font-weight:600; }
+  #prompt { font-size:40px; font-weight:700; text-align:center; min-height:1.3em; margin:8px 0; }
+  #prompt.lean { color:var(--accent); }
+  #subprompt { text-align:center; color:var(--muted); min-height:1.4em; }
+  #instr { font-size:17px; background:#f0f3f8; border-radius:8px; padding:12px 14px; margin:10px 0; }
+  .bar { height:10px; background:#e7eaf0; border-radius:5px; overflow:hidden; margin:10px 0; }
+  .bar > div { height:100%; width:0; background:var(--accent); transition:width .2s linear; }
+  #fall { width:100%; padding:22px; font-size:24px; font-weight:800; color:#fff; background:var(--stop); border:none; margin-top:10px; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  canvas { width:100%; height:90px; background:#fbfcfd; border:1px solid var(--line); border-radius:8px; }
+  pre#report { white-space:pre-wrap; font:13px/1.45 ui-monospace, Consolas, monospace; background:#f7f8fa;
+               border:1px solid var(--line); border-radius:8px; padding:12px; max-height:520px; overflow:auto; }
+  .muted { color:var(--muted); font-size:14px; }
+  .warn { color:var(--warn); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Balance Band Recorder</h1>
+  <span><span id="bandDot" class="dot"></span><span id="bandState">Band not connected</span></span>
+  <button id="btConnect" class="primary">Connect band</button>
+  <button id="simConnect">Use simulated band</button>
+  <span id="rate" class="muted"></span>
+</header>
+
+<main>
+  <section>
+    <div class="card">
+      <h2>Session</h2>
+      <div class="row">
+        <input id="person" placeholder="Person ID (not name)" size="16" autocomplete="off">
+        <select id="site"><option value="waist">Waist</option><option value="shin">Shin</option></select>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button id="newSession" class="primary">New session</button>
+      </div>
+      <p id="sessionInfo" class="muted"></p>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h2>Steps</h2>
+      <ul id="steps"></ul>
+      <button id="analyse" style="width:100%; margin-top:8px" disabled>Analyse session</button>
+    </div>
+  </section>
+
+  <section>
+    <div class="card">
+      <h2 id="stepTitle">Choose a step</h2>
+      <div id="instr">Connect the band, enter the person's ID and start a new session.</div>
+      <div id="prompt"></div>
+      <div id="subprompt"></div>
+      <div class="bar"><div id="progress"></div></div>
+      <div class="row">
+        <button id="start" class="primary" disabled>Start recording</button>
+        <button id="cancel" disabled>Cancel</button>
+        <span id="recInfo" class="muted"></span>
+      </div>
+      <button id="fall" disabled>LOST BALANCE &nbsp;(space bar)</button>
+      <p class="muted">Press when the person steps, grabs, opens the eyes or has to be caught. The step ends 1 s later.</p>
+      <h2 style="margin-top:14px">Live signal — band tilt</h2>
+      <canvas id="live" width="800" height="90"></canvas>
+      <div id="liveInfo" class="muted"></div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h2>Report</h2>
+      <pre id="report">Record the steps, then press “Analyse session”.</pre>
+    </div>
+  </section>
+</main>
+
+<script src="protocol.js"></script>
+<script src="sim.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

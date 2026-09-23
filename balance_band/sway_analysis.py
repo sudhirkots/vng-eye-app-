@@ -17,18 +17,23 @@ SESSION (one CSV per step, all in one folder, band NOT moved between steps):
   eo_foam.csv  eyes open,   on foam      20 s   somatosensory degraded  -> how much SOMATOSENSORY input matters
   ec_foam.csv  eyes closed, on foam      20 s   both removed            -> balance rests mainly on VESTIBULAR input
 
-Each CSV: t, ax, ay, az, gx, gy, gz [, fall]
+Each CSV: t, ax, ay, az, gx, gy, gz [, fall] [, phase]
   t in s; accel in g or m/s^2 (only its direction is used); gyro in deg/s (or --gyro-units rad);
-  fall = 1 from the moment the examiner presses "lost balance / stepped / grabbed".
+  fall = 1 from the moment the examiner presses "lost balance / stepped / grabbed";
+  phase (los.csv only) = the instruction on screen at that moment: centre / forward / backward / left / right.
+
+BAND ORIENTATION IS FOUND AUTOMATICALLY: the band can be strapped on any way round. With the phase labels
+in los.csv, "down" comes from the quiet stance (centre) and "forward" from the forward lean, so the sensor
+axes never have to be known. Without labels, give --forward/--left, or +x forward / +y left is assumed.
 
 For each standing condition we report the sway angle, how it compares with eyes-open-firm, and how much of
 the person's OWN limit of stability the sway used up. Qualitative read + honest confidence: bad or missing
 data give INSUFFICIENT / UNCLEAR, never a false "normal".
 
 Usage:
-    python balance_band/sway_analysis.py <session_folder> [--site waist|shin] [--forward +x --left +y]
-                                         [--json out.json]
-    python balance_band/sway_analysis.py <empty_folder> --demo backward     # synthetic session
+    python balance_band/sway_analysis.py <session_folder> [--site waist|shin] [--json out.json]
+                                         [--forward +x --left +y]      (only if los.csv has no phase labels)
+    python balance_band/sway_analysis.py <empty_folder> --demo backward [--demo-tilted]  # synthetic session
     (demo patterns: normal, vestibular, somatosensory, vision, backward)
 
 Body frame: F = person's forward, L = person's LEFT, U = up.
@@ -51,6 +56,10 @@ WARN_FS_HZ = 50.0          # >= 100 Hz recommended
 MIN_DURATION_S = 10.0      # a completed standing trial shorter than this is insufficient
 PLANNED_DURATION_S = 20.0
 CENTRE_S = 2.0             # quiet stance at the start of los.csv that defines the centre
+LOS_SCRIPT = [("centre", 3), ("forward", 6), ("centre", 3), ("backward", 6), ("centre", 3),
+              ("left", 6), ("centre", 3), ("right", 6), ("centre", 3)]      # phase, seconds (as the app shows)
+AXES_MIN_TILT_DEG = 1.5    # the forward lean must tilt the band at least this much to find "forward"
+AXES_AGREE = 0.7           # cos(angle) the other leans must agree with the found axes
 MIN_LOS_DEG = 1.0          # a lean smaller than this = direction not attempted
 
 # ---- signal processing ----
@@ -100,6 +109,7 @@ def load_trial(path):
         return None
     d = {k: np.array([float(r[k]) for r in rows]) for k in ("t", "ax", "ay", "az", "gx", "gy", "gz")}
     d["fall"] = np.array([int(float(r.get("fall") or 0)) for r in rows])
+    d["phase"] = np.array([(r.get("phase") or "").strip().lower() for r in rows])
     return d
 
 def lowpass(x, fs, fc):
@@ -150,6 +160,44 @@ def pct(x, q):
     return float(np.percentile(x, q)) if len(x) else float("nan")
 
 
+# ------------------------------------------------------------------ band orientation from the LOS recording
+def _lean_direction(acc, g_hat, mask):
+    """Horizontal direction (sensor coords) in which gravity APPEARS to move during a lean, and the tilt (deg)."""
+    a = acc[mask]
+    if len(a) < 5:
+        return None, 0.0
+    a = a / np.linalg.norm(a, axis=1, keepdims=True)
+    tilt = np.degrees(np.arccos(np.clip(a @ g_hat, -1, 1)))
+    peak = a[tilt >= 0.7 * tilt.max()]                     # the held part of the lean
+    h = peak.mean(0) - g_hat
+    h -= (h @ g_hat) * g_hat                               # keep only the horizontal part
+    n = np.linalg.norm(h)
+    return (h / n if n > 0 else None), float(tilt.max())
+
+def auto_axes(los):
+    """Body axes (rows F, L, U in sensor coords) from a phase-labelled LOS recording -> (B, note) or (None, why)."""
+    if los is None or not np.any(los["phase"] == "forward") or not np.any(los["phase"] == "centre"):
+        return None, "no phase labels in los.csv"
+    acc = np.stack([los["ax"], los["ay"], los["az"]], 1)
+    centre = np.flatnonzero(los["phase"] == "centre")
+    breaks = np.flatnonzero(np.diff(centre) > 1)
+    first = centre[:breaks[0] + 1] if breaks.size else centre   # the opening quiet stance
+    g = acc[first].mean(0); g_hat = g / np.linalg.norm(g)       # UP (the accelerometer reads +1 g upward)
+    d, tilt = _lean_direction(acc, g_hat, los["phase"] == "forward")
+    if d is None or tilt < AXES_MIN_TILT_DEG:
+        return None, f"forward lean too small ({tilt:.1f} deg) to find the band's forward direction"
+    F = -d                                                 # leaning forward, gravity appears toward -F
+    L = np.cross(g_hat, F)
+    B = np.vstack([F, L, g_hat])
+    odd = []
+    for ph, want in (("backward", -F), ("left", L), ("right", -L)):
+        dd, tt = _lean_direction(acc, g_hat, los["phase"] == ph)
+        if dd is not None and tt >= AXES_MIN_TILT_DEG and -dd @ want < AXES_AGREE:
+            odd.append(ph)
+    return B, (f"the {'/'.join(odd)} lean did not point where expected — were the leans done in the "
+               "order shown? Check the result." if odd else "")
+
+
 # ------------------------------------------------------------------ step 1: limits of stability
 def analyse_los(tr, B, R, gyro_rad=False):
     out = {"status": "insufficient", "notes": []}
@@ -161,10 +209,15 @@ def analyse_los(tr, B, R, gyro_rad=False):
     if fall.size:
         out["notes"].append(f"lost balance at {tr['t'][stop]-tr['t'][0]:.1f} s while leaning — "
                             "limits are measured up to that moment")
-    ap, ml = ap[:stop], ml[:stop]
+    ap, ml, ph = ap[:stop], ml[:stop], tr["phase"][:stop]
     if len(ap) < int(3 * fs):
         out["notes"].append("recording too short"); return out
     lim = {"forward": pct(ap, 99), "backward": -pct(ap, 1), "left": pct(ml, 99), "right": -pct(ml, 1)}
+    if np.any(ph != ""):     # labelled: each limit only from its own lean, so sway elsewhere cannot count
+        sel = {"forward": (ap, 1), "backward": (ap, -1), "left": (ml, 1), "right": (ml, -1)}
+        for d, (x, sgn) in sel.items():
+            m = ph == d
+            lim[d] = sgn * pct(x[m], 99 if sgn > 0 else 1) if m.any() else 0.0
     out["limits_deg"] = {k: round(max(v, 0.0), 1) for k, v in lim.items()}
     missing = [k for k, v in lim.items() if v < MIN_LOS_DEG]
     if missing:
@@ -249,13 +302,29 @@ def analyse_trial(tr, B, R, los=None, gyro_rad=False):
 
 
 # ------------------------------------------------------------------ session
-def analyse_session(folder, forward="+x", left="+y", gyro_rad=False, site="waist"):
-    folder = Path(folder); B = body_matrix(forward, left)
+def analyse_session(folder, forward=None, left=None, gyro_rad=False, site="waist"):
+    """forward/left: sensor axes (e.g. '+x', '+y'). Leave both None to find them from the LOS recording."""
+    folder = Path(folder)
     los_tr = load_trial(folder / "los.csv")
     trials = {c: load_trial(folder / f"{c}.csv") for c in CONDITIONS}
     if site not in SITES:
         raise ValueError(f"site must be one of {SITES}")
     res = {"site": site, "los": None, "trials": {}, "comparisons": {}, "findings": [], "caveats": []}
+    if forward or left:
+        B = body_matrix(forward or "+x", left or "+y")
+        res["axes"] = {"method": "given", "forward": forward or "+x", "left": left or "+y"}
+    else:
+        B, why = auto_axes(los_tr)
+        if B is not None:
+            res["axes"] = {"method": "found automatically from the limits-of-stability leans",
+                           "forward": np.round(B[0], 3).tolist(), "left": np.round(B[1], 3).tolist()}
+            if why:
+                res["caveats"].append("Band orientation: " + why)
+        else:
+            B = body_matrix("+x", "+y")
+            res["axes"] = {"method": "ASSUMED (+x forward, +y left)", "forward": "+x", "left": "+y"}
+            res["caveats"].append(f"Band orientation NOT known ({why}); assumed sensor +x = forward, +y = left. "
+                                  "If that is wrong, the forward/backward and left/right findings are wrong.")
 
     # CENTRE = quiet stance at the start of the LOS recording (else the start of eyes-open-firm)
     ref, secs = (los_tr, CENTRE_S) if los_tr is not None else (trials["eo_firm"], 1.0)
@@ -380,7 +449,10 @@ def _caveats(res):
 
 # ------------------------------------------------------------------ report
 def report_text(res):
-    out = [f"BALANCE BAND — {res.get('site', 'waist')} IMU, standing balance", ""]
+    out = [f"BALANCE BAND — {res.get('site', 'waist')} IMU, standing balance"]
+    if res.get("axes"):
+        out.append(f"Band orientation: {res['axes']['method']}")
+    out.append("")
     L = res["los"]
     if L:
         out.append("Step 1 — Limits of stability (how far the COG can lean from centre without stepping):")
@@ -430,29 +502,44 @@ def _smooth_noise(n, fs, rng, fc=0.6):
         x = y
     x = x[-n:]; return x / (x.std() + 1e-12)
 
-def _write(path, t, ap, ml, fall, rng):
+def _write(path, t, ap, ml, fall, rng, phase=None, mount=None):
     apr, mlr = np.radians(ap), np.radians(ml)
     aF, aL = -np.sin(apr), -np.sin(mlr); aU = np.sqrt(np.clip(1 - aF**2 - aL**2, 0, 1))
     acc = np.stack([aF, aL, aU], 1) + 0.004 * rng.standard_normal((len(t), 3))
     gyr = np.stack([-np.gradient(ml, t), np.gradient(ap, t), np.zeros(len(t))], 1)
     gyr += 0.3 * rng.standard_normal((len(t), 3)) + np.array([0.4, -0.3, 0.1])     # noise + gyro bias
+    if mount is not None:          # rows of `mount` = body F, L, U in sensor coords -> express in the sensor frame
+        acc, gyr = acc @ mount, gyr @ mount
+    head = ["t", "ax", "ay", "az", "gx", "gy", "gz", "fall"] + (["phase"] if phase is not None else [])
     with open(path, "w", newline="", encoding="utf-8") as fh:
-        w = csv.writer(fh); w.writerow(["t", "ax", "ay", "az", "gx", "gy", "gz", "fall"])
+        w = csv.writer(fh); w.writerow(head)
         for i in range(len(t)):
-            w.writerow([f"{t[i]:.3f}", *(f"{v:.5f}" for v in acc[i]), *(f"{v:.4f}" for v in gyr[i]), fall[i]])
+            w.writerow([f"{t[i]:.3f}", *(f"{v:.5f}" for v in acc[i]), *(f"{v:.4f}" for v in gyr[i]), fall[i]]
+                       + ([phase[i]] if phase is not None else []))
 
-def write_demo(pattern, folder, fs=100.0, dur=20.0, seed=1):
+def random_mount(rng):
+    """A random band orientation (a proper rotation), as if strapped on any way round."""
+    q, _ = np.linalg.qr(rng.standard_normal((3, 3)))
+    return q * np.sign(np.linalg.det(q))
+
+def write_demo(pattern, folder, fs=100.0, dur=20.0, seed=1, tilted=False):
     folder = Path(folder); folder.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(seed); spec = DEMO[pattern]
-    # limits of stability: centre 3 s, then F, B, L, R leans (2 s out, 1 s hold, 2 s back, 1 s rest)
-    lf, lb, ll, lr = spec["los"]; seq = [(lf, 0), (-lb, 0), (0, ll), (0, -lr)]
-    n = int((3 + 6 * len(seq)) * fs); t = np.arange(n) / fs
+    mount = random_mount(np.random.default_rng(seed + 100)) if tilted else None
+    # limits of stability, following LOS_SCRIPT: lean out over 2 s and hold; come back during the next centre
+    lim = dict(zip(DIRS, spec["los"]))
+    vec = {"forward": (1, 0), "backward": (-1, 0), "left": (0, 1), "right": (0, -1)}
+    n = int(sum(d for _, d in LOS_SCRIPT) * fs); t = np.arange(n) / fs
     ap = 0.1 * _smooth_noise(n, fs, rng); ml = 0.1 * _smooth_noise(n, fs, rng)
-    for k, (dap, dml) in enumerate(seq):
-        s = 3 + 6 * k; x = np.clip((t - s) / 2, 0, 1) - np.clip((t - s - 3) / 2, 0, 1)
-        prof = 0.5 - 0.5 * np.cos(np.pi * x)
-        ap += dap * prof; ml += dml * prof
-    _write(folder / "los.csv", t, ap, ml, np.zeros(n, int), rng)
+    phase = np.empty(n, dtype=object); s = 0.0
+    for name, d in LOS_SCRIPT:
+        phase[(t >= s) & (t < s + d)] = name
+        if name in vec:
+            x = np.clip((t - s) / 2, 0, 1) - np.clip((t - s - d) / 2, 0, 1)
+            prof = 0.5 - 0.5 * np.cos(np.pi * x)
+            ap += lim[name] * vec[name][0] * prof; ml += lim[name] * vec[name][1] * prof
+        s += d
+    _write(folder / "los.csv", t, ap, ml, np.zeros(n, int), rng, phase=phase, mount=mount)
     for c in CONDITIONS:
         s = spec[c]; amp_ap, amp_ml = s[0], s[1]
         fall_t = s[2] if len(s) > 2 else None; lean = s[3] if len(s) > 3 else 0.0
@@ -467,23 +554,25 @@ def write_demo(pattern, folder, fs=100.0, dur=20.0, seed=1):
             else:
                 ml = ml - 6.0 * ramp               # falls to the right
             fall[k:] = 1
-        _write(folder / f"{c}.csv", t, ap, ml, fall, rng)
+        _write(folder / f"{c}.csv", t, ap, ml, fall, rng, mount=mount)
     return folder
 
 
 def main(argv=None):
     p = argparse.ArgumentParser(description="Balance-band standing-balance analysis")
     p.add_argument("folder", help="session folder: los.csv, eo_firm.csv, ec_firm.csv, eo_foam.csv, ec_foam.csv")
-    p.add_argument("--forward", default="+x", help="sensor axis pointing to the person's front (e.g. +x, -z)")
-    p.add_argument("--left", default="+y", help="sensor axis pointing to the person's LEFT")
+    p.add_argument("--forward", help="sensor axis pointing to the person's front (e.g. +x, -z); "
+                                     "omit to find it automatically from los.csv")
+    p.add_argument("--left", help="sensor axis pointing to the person's LEFT; omit for automatic")
     p.add_argument("--site", default="waist", choices=SITES,
                    help="where the band is worn: waist (lower back, recommended) or shin")
     p.add_argument("--gyro-units", default="deg", choices=["deg", "rad"])
     p.add_argument("--demo", choices=sorted(DEMO), help="first write a synthetic session of this pattern")
+    p.add_argument("--demo-tilted", action="store_true", help="demo: band strapped on at a random orientation")
     p.add_argument("--json", help="also write the full result to this JSON file")
     a = p.parse_args(argv)
     if a.demo:
-        write_demo(a.demo, a.folder)
+        write_demo(a.demo, a.folder, tilted=a.demo_tilted)
     res = analyse_session(a.folder, a.forward, a.left, a.gyro_units == "rad", a.site)
     print(report_text(res))
     if a.json:
