@@ -1,0 +1,6 @@
+{
+  "spontaneous downbeat nystagmus": {
+    "R": {"cx": 105, "cy": 124, "r": 11, "frame": 1, "eye": "R", "source": "manual_circle_seed"},
+    "L": {"cx": 215, "cy": 115, "r": 13, "frame": 1, "eye": "L", "source": "manual_circle_seed"}
+  }
+}

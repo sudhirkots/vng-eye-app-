@@ -1,0 +1,6 @@
+{
+  "nystagmus at rest to left in right vestibular neuritis": {
+    "R": {"cx": 500, "cy": 386, "r": 96, "frame": 1, "eye": "R", "source": "manual_circle_seed"},
+    "L": {"cx": 1559, "cy": 457, "r": 96, "frame": 1, "eye": "L", "source": "manual_circle_seed"}
+  }
+}

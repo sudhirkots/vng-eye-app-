@@ -1,0 +1,6 @@
+{
+  "downbeating nystagmus better": {
+    "R": {"cx": 92, "cy": 158, "r": 17, "frame": 1, "eye": "R", "source": "manual_circle_seed"},
+    "L": {"cx": 287, "cy": 165, "r": 17, "frame": 1, "eye": "L", "source": "manual_circle_seed"}
+  }
+}

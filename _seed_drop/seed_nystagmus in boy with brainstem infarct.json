@@ -1,0 +1,6 @@
+{
+  "nystagmus in boy with brainstem infarct": {
+    "R": {"cx": 126, "cy": 101, "r": 10, "frame": 1, "eye": "R", "source": "manual_circle_seed"},
+    "L": {"cx": 226, "cy": 87, "r": 10, "frame": 1, "eye": "L", "source": "manual_circle_seed"}
+  }
+}

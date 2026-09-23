@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Iris seed marker — click the clearer iris</title>
+<title>Iris seed marker — mark the approximate iris circle</title>
 <style>
   :root { --bg:#111; --panel:#1b1b1b; --ink:#eee; --R:#19d3ff; --L:#ff9a3c; }
   * { box-sizing:border-box; } body { margin:0; font-family:Segoe UI, system-ui, sans-serif; background:var(--bg); color:var(--ink); user-select:none; }
   #bar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:8px 10px; background:var(--panel); position:sticky; top:0; border-bottom:1px solid #333; z-index:5; }
   button, label.btn { background:#2a2a2a; color:var(--ink); border:1px solid #444; border-radius:6px; padding:7px 11px; font-size:14px; cursor:pointer; }
-  canvas { background:#000; max-width:98vw; box-shadow:0 0 0 1px #333; cursor:crosshair; }
+  canvas { background:#000; max-width:98vw; box-shadow:0 0 0 1px #333; cursor:crosshair; touch-action:none; }
   #wrap { display:flex; justify-content:center; padding:10px; } #status { font-size:13px; opacity:.9; }
   .sep { width:1px; height:26px; background:#3a3a3a; margin:0 2px; } #hint { padding:2px 12px 10px; font-size:13px; opacity:.85; line-height:1.55; }
   b.R { color:var(--R); } b.L { color:var(--L); } code { background:#000; padding:1px 5px; border-radius:4px; }
@@ -17,61 +17,107 @@
 </head>
 <body>
 <div id="bar">
-  <label class="btn">📂 Load clip (.mp4)<input id="file" type="file" accept="video/*" hidden></label>
+  <label class="btn">📂 Load clip<input id="file" type="file" accept="video/*" hidden></label>
   <span class="sep"></span>
-  <button id="clear">Clear</button>
+  <button id="clear">Clear all</button>
+  <button id="delR">Delete R</button><button id="delL">Delete L</button>
+  <span class="sep"></span>
+  <label class="btn" style="cursor:default">fps <input id="fps" type="number" value="25" style="width:50px;background:#000;color:var(--ink);border:0"></label>
+  <label class="btn" style="cursor:default">frame <input id="frameNo" type="number" value="0" style="width:70px;background:#000;color:var(--ink);border:0"></label>
+  <button id="go">Go</button><button id="prev">◀ frame</button><button id="next">frame ▶</button>
   <span class="sep"></span><span id="status">no clip</span><span class="sep"></span>
   <button id="export">⬇ Download seed</button>
 </div>
 <div id="wrap"><canvas id="view"></canvas></div>
 <div id="hint">
-  Load the clip; it shows the <b>first frame</b>. <b>Click the iris of the clearer eye — ONE click is enough.</b>
-  Clicking on the <b class="R">left half</b> marks the patient's RIGHT eye; the <b class="L">right half</b>
-  marks the patient's LEFT eye. You may click the other eye too if you want both. Then <b>Download seed</b>
-  and paste the line into <code>manual_seeds.json</code> (or just tell me the numbers). EllSeg locates the
-  iris on every frame from this one point.
+  Load the clip; it shows the <b>first frame</b>. <b>Mark the approximate iris circle of each eye you want:</b>
+  press on the iris <b>centre</b> and <b>drag out to the iris edge</b> to set the radius, then release. (A plain
+  click without a drag places a default-size circle you can re-drag.) The <b class="R">left half</b> of the image is
+  the patient's <b class="R">RIGHT</b> eye; the <b class="L">right half</b> is the patient's <b class="L">LEFT</b> eye.
+  <b>Single-eye is fine — mark only the clearer eye.</b> Then <b>Download seed</b> and paste the block into
+  <code>manual_seeds.json</code>. This circle is only a <i>starting window</i> for EllSeg (centre + radius); it is
+  NOT a measurement and is not used as the iris outline.
+  <br><b>Re-marking on track loss:</b> if the tracer stops and asks you to re-mark at frame F, set <b>fps</b>,
+  type F in <b>frame</b> and press <b>Go</b> (or step with ◀/▶), mark the iris circle there, and add the exported
+  mark (it carries <code>"frame": F</code>) to that eye as a list, e.g. <code>"R": [ {…f0…}, {…fF…} ]</code>.
 </div>
 <video id="vid" style="display:none"></video>
 <script>
 const vid = document.getElementById('vid'), view = document.getElementById('view'), ctx = view.getContext('2d');
-let clip = '', seeds = {};   // seeds.R / seeds.L = [x,y]
+const COL = { R: '#19d3ff', L: '#ff9a3c' }, LAB = { R: 'R (patient right, image-left)', L: 'L (patient left, image-right)' };
+let clip = '', seeds = {};            // seeds.R / seeds.L = {cx, cy, r, frame, eye}
+let drag = null;                      // {ek, cx, cy, r} while dragging
 document.getElementById('file').addEventListener('change', e => {
   const f = e.target.files[0]; if (!f) return;
-  clip = f.name.replace(/\.[^.]+$/, ''); seeds = {};
+  clip = f.name.replace(/\.[^.]+$/, ''); seeds = {}; drag = null;
   vid.src = URL.createObjectURL(f); vid.currentTime = 0.05;
 });
 vid.addEventListener('loadeddata', () => vid.currentTime = 0.05);
-vid.addEventListener('seeked', draw);
+vid.addEventListener('seeked', () => { const fno = document.getElementById('frameNo'); if (document.activeElement !== fno) fno.value = curFrame(); draw(); });
+function curFps() { return +document.getElementById('fps').value || 25; }
+function curFrame() { return Math.round(vid.currentTime * curFps()); }
+function seekFrame(f) { vid.currentTime = Math.max(0, f) / curFps(); }
+document.getElementById('go').onclick = () => seekFrame(+document.getElementById('frameNo').value || 0);
+document.getElementById('prev').onclick = () => seekFrame(curFrame() - 1);
+document.getElementById('next').onclick = () => seekFrame(curFrame() + 1);
+
+function circle(c, live) {
+  ctx.beginPath(); ctx.arc(c.cx, c.cy, Math.max(c.r, 1), 0, 7);
+  ctx.strokeStyle = COL[c.ek || c.eye]; ctx.lineWidth = 3; ctx.setLineDash(live ? [6, 5] : []); ctx.stroke(); ctx.setLineDash([]);
+  ctx.beginPath(); ctx.arc(c.cx, c.cy, 4, 0, 7); ctx.fillStyle = COL[c.ek || c.eye]; ctx.fill();
+  ctx.fillStyle = '#fff'; ctx.font = '18px sans-serif';
+  ctx.fillText(`${LAB[c.ek || c.eye]}  r=${Math.round(c.r)}`, c.cx + c.r + 6, c.cy - 6);
+}
 function draw() {
   view.width = vid.videoWidth; view.height = vid.videoHeight;
   ctx.drawImage(vid, 0, 0, view.width, view.height);
-  const col = { R: '#19d3ff', L: '#ff9a3c' }, lab = { R: 'R (patient right, image-left)', L: 'L (patient left, image-right)' };
-  for (const ek in seeds) { const p = seeds[ek];
-    ctx.beginPath(); ctx.arc(p[0], p[1], 11, 0, 7); ctx.fillStyle = '#fff'; ctx.fill();
-    ctx.beginPath(); ctx.arc(p[0], p[1], 6, 0, 7); ctx.fillStyle = col[ek]; ctx.fill();
-    ctx.fillStyle = '#fff'; ctx.font = '18px sans-serif'; ctx.fillText(lab[ek], p[0] + 13, p[1] - 8);
-  }
+  for (const ek in seeds) circle(seeds[ek], false);
+  if (drag) circle(drag, true);
   status();
 }
+function pos(e) {
+  const r = view.getBoundingClientRect();
+  return { x: Math.round((e.clientX - r.left) * view.width / r.width),
+           y: Math.round((e.clientY - r.top) * view.height / r.height) };
+}
 view.addEventListener('pointerdown', e => {
-  if (!clip) return;
-  const r = view.getBoundingClientRect(), sx = view.width / r.width, sy = view.height / r.height;
-  const x = Math.round((e.clientX - r.left) * sx), y = Math.round((e.clientY - r.top) * sy);
-  seeds[x < view.width / 2 ? 'R' : 'L'] = [x, y]; draw();
+  if (!clip) return; view.setPointerCapture(e.pointerId);
+  const p = pos(e); drag = { ek: p.x < view.width / 2 ? 'R' : 'L', cx: p.x, cy: p.y, r: 0 }; draw();
 });
-document.getElementById('clear').onclick = () => { seeds = {}; draw(); };
+view.addEventListener('pointermove', e => {
+  if (!drag) return; const p = pos(e);
+  drag.r = Math.round(Math.hypot(p.x - drag.cx, p.y - drag.cy)); draw();
+});
+view.addEventListener('pointerup', e => {
+  if (!drag) return; const ek = drag.ek;
+  if (drag.r < 4) drag.r = Math.round(view.width * 0.05);          // plain click -> default radius
+  seeds[ek] = { cx: drag.cx, cy: drag.cy, r: drag.r, frame: curFrame(), eye: ek, source: 'manual_circle_seed' };
+  drag = null; draw();
+});
+view.addEventListener('contextmenu', e => {                        // right-click removes the circle under the cursor
+  e.preventDefault(); if (!clip) return; const p = pos(e);
+  for (const ek in seeds) { const c = seeds[ek]; if (Math.hypot(p.x - c.cx, p.y - c.cy) <= c.r + 8) { delete seeds[ek]; break; } }
+  draw();
+});
+document.getElementById('clear').onclick = () => { seeds = {}; drag = null; draw(); };
+document.getElementById('delR').onclick = () => { delete seeds.R; draw(); };
+document.getElementById('delL').onclick = () => { delete seeds.L; draw(); };
 function status() {
+  const s = Object.keys(seeds).map(ek => `${ek}(r${seeds[ek].r}@f${seeds[ek].frame})`).join(' + ');
   document.getElementById('status').textContent = clip
-    ? `${clip}  (${view.width}x${view.height})  —  ${Object.keys(seeds).join('+') || 'click an iris'}` : 'no clip';
+    ? `${clip}  (${view.width}x${view.height})  frame ${curFrame()}  —  ${s || 'drag an iris circle'}` : 'no clip';
 }
 document.getElementById('export').onclick = () => {
-  if (!Object.keys(seeds).length) { document.getElementById('status').textContent = 'click an iris first'; return; }
-  const inner = Object.keys(seeds).map(ek => `"${ek}": [${seeds[ek]}]`).join(', ');
-  const line = `  "${clip}": {${inner}}`;
-  navigator.clipboard && navigator.clipboard.writeText(line).catch(() => {});
-  const blob = new Blob([`{\n${line}\n}\n`], { type: 'application/json' });
+  if (!Object.keys(seeds).length) { document.getElementById('status').textContent = 'mark an iris circle first'; return; }
+  const inner = Object.keys(seeds).map(ek => {
+    const c = seeds[ek];
+    return `    "${ek}": {"cx": ${c.cx}, "cy": ${c.cy}, "r": ${c.r}, "frame": ${c.frame}, "eye": "${ek}", "source": "manual_circle_seed"}`;
+  }).join(',\n');
+  const block = `  "${clip}": {\n${inner}\n  }`;
+  navigator.clipboard && navigator.clipboard.writeText(block).catch(() => {});
+  const blob = new Blob([`{\n${block}\n}\n`], { type: 'application/json' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'seed_' + clip + '.json'; a.click();
-  document.getElementById('status').textContent = 'saved:  ' + line.trim();   // no popup
+  document.getElementById('status').textContent = 'saved circle seed for ' + Object.keys(seeds).join('+');
 };
 </script>
 </body>

@@ -1,0 +1,6 @@
+{
+  "fistula nystagmus": {
+    "L": {"cx": 981, "cy": 658, "r": 46, "frame": 1, "eye": "L", "source": "manual_circle_seed"},
+    "R": {"cx": 570, "cy": 746, "r": 46, "frame": 1, "eye": "R", "source": "manual_circle_seed"}
+  }
+}

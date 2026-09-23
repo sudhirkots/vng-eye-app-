@@ -1,0 +1,6 @@
+{
+  "unidirectional nystagmus": {
+    "R": {"cx": 93, "cy": 132, "r": 20, "frame": 1, "eye": "R", "source": "manual_circle_seed"},
+    "L": {"cx": 285, "cy": 129, "r": 19, "frame": 1, "eye": "L", "source": "manual_circle_seed"}
+  }
+}

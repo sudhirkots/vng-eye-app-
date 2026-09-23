@@ -1,0 +1,6 @@
+{
+  "gaze-evoked nystagmus-1": {
+    "R": {"cx": 541, "cy": 402, "r": 72, "frame": 1, "eye": "R", "source": "manual_circle_seed"},
+    "L": {"cx": 1250, "cy": 403, "r": 83, "frame": 1, "eye": "L", "source": "manual_circle_seed"}
+  }
+}

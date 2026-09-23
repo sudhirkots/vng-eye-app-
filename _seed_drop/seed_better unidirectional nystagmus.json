@@ -1,0 +1,6 @@
+{
+  "better unidirectional nystagmus": {
+    "R": {"cx": 108, "cy": 172, "r": 17, "frame": 1, "eye": "R", "source": "manual_circle_seed"},
+    "L": {"cx": 331, "cy": 164, "r": 19, "frame": 1, "eye": "L", "source": "manual_circle_seed"}
+  }
+}

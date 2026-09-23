@@ -1,0 +1,6 @@
+{
+  "severe vestibular neuronitis nystagmus": {
+    "R": {"cx": 151, "cy": 251, "r": 37, "frame": 1, "eye": "R", "source": "manual_circle_seed"},
+    "L": {"cx": 528, "cy": 266, "r": 39, "frame": 1, "eye": "L", "source": "manual_circle_seed"}
+  }
+}

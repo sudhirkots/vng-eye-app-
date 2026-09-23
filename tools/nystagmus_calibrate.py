@@ -35,7 +35,7 @@ out = ["# CALIBRATION — nystagmus direction detector vs clinician\n",
        "`present/absent · direction · gaze zone · gaze effect · confidence`\n"]
 for clip, expected in CLIPS:
     fps = fps_of(clip)
-    env = dict(os.environ, RIT_CLIP=clip, RIT_MAXF=str(int(CAP_S*fps)))
+    env = dict(os.environ, RIT_CLIP=clip, RIT_MAXF=str(int(CAP_S*fps)), RIT_BATCH="1", RIT_ALLOW_AUTOSEED="1")
     print(f"=== {clip}  ({fps:.0f} fps) ===")
     tr = subprocess.run([PY, str(REPO/"tools"/"ellseg_centroid_trace.py")], env=env, capture_output=True, text=True)
     seedline = next((l for l in tr.stdout.splitlines() if l.startswith("seeds:")), "seeds: ?")

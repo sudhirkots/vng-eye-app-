@@ -1,0 +1,6 @@
+{
+  "nystagmus at rest to left and head impulse positive in right vestibular neuritis": {
+    "R": {"cx": 547, "cy": 301, "r": 86, "frame": 1, "eye": "R", "source": "manual_circle_seed"},
+    "L": {"cx": 1523, "cy": 420, "r": 91, "frame": 1, "eye": "L", "source": "manual_circle_seed"}
+  }
+}

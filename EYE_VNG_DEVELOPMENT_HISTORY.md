@@ -2365,3 +2365,36 @@ handoff is `HANDOFF_NYSTAGMUS_DETECTOR.md`. Key code: `tools/ellseg_centroid_tra
 `tools/nystagmus_direction.py`.
 
 ---
+
+## 27. Head-motion-compensated optical-flow probe — tested and DISCARDED (2026-07-05, negative result)
+
+A motion-based front end was probed as an alternative to the centroid: could optical flow inside a marked eye
+region recover nystagmus direction where centroid tracking is noisy? The motivation was clinically sound —
+the clinician **automatically subtracts head/camera motion** (anything common to the whole face) and reads
+only the **eye-relative residual**. Recorded so the idea is not blindly re-tried.
+
+1. **The clinical principle was correct:** observed eye-region motion **minus** common face/head/camera motion
+   **= eye-relative motion.** That is exactly the right frame of reference.
+2. **The implementation failed in practice** (probe `tools/flow_probe.py`, dense Farneback flow in a manual-seed
+   eye box; global motion from RANSAC affine on peri-orbital face features, subtracted per pixel):
+   - **raw** flow false-positived on the normal clip (called it left-beating 0.60, ≈ the true positive 0.56);
+   - **compensated** flow still did **not** separate normal from positive (0.20 vs 0.13);
+   - compensation **flipped the positive vestibular clip to the WRONG direction** (LEFT → RIGHT) — subtracting
+     an affine whose estimation error is the size of the sub-pixel eye-relative drift swamps the real signal;
+   - the **pontine/uncertain** clip did not improve (≈0 head motion detected, residual flat ≈0.01).
+3. **Conclusion:** optical flow is **too low-SNR for this video material** (low-res Frenzel/IR, textureless
+   sclera, lids/lashes/glints) to serve as the main front end. The scalar reduction of a noisy flow field
+   loses the signal, and motion compensation adds estimation noise rather than removing a confound.
+4. **Active path remains:** **EllSeg centroid → signal-quality gate → qualitative nystagmus detector.** Notably,
+   the "subtract common motion" principle is **already in that path**, applied to a *clean* signal: the detector
+   removes slow (>3 s) head/camera drift from the centroid, and the sclera-balance gaze zoning is head-motion
+   invariant. Compensation only helps once the underlying eye-position signal is clean.
+5. **The main practical lever is good seeding / good centroid localization — not optical flow.**
+
+**Status:** `tools/flow_probe.py` is kept as a **documented negative result, marked DEPRECATED / inactive**
+(header banner). Do **not** integrate, tune, or return to optical-flow motion detection unless Dr. K explicitly
+asks. May be moved to an `archive/probes/` folder later; not deleted. A separate, harmless compatibility fix
+was kept: `tools/ellseg_centroid_trace.py` now accepts non-`.mp4` containers (`.mpg/.MPG/.wmv`) by matching the
+sample file stem — this is IO only, unrelated to the flow probe.
+
+---

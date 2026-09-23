@@ -6,3 +6,7 @@ outputs/
 *.mp4
 *.avi
 *.mov
+*.mpg
+*.MPG
+# Patient eye videos — never push these to GitHub
+samples/

@@ -1,0 +1,6 @@
+{
+  "latent nystagmus": {
+    "R": {"cx": 141, "cy": 158, "r": 11, "frame": 1, "eye": "R", "source": "manual_circle_seed"},
+    "L": {"cx": 240, "cy": 159, "r": 10, "frame": 1, "eye": "L", "source": "manual_circle_seed"}
+  }
+}

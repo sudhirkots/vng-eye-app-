@@ -18,6 +18,9 @@ from modelSummary import model_dict
 REPO = Path(__file__).resolve().parent.parent
 CLIP = os.environ.get("RIT_CLIP", "nystagmus at rest to left in right vestibular neuritis")
 VIDEO = REPO / "samples" / f"{CLIP}.mp4"
+if not VIDEO.exists():                                       # accept any container (.mpg/.MPG/.wmv/...)
+    _c = [p for p in (REPO / "samples").iterdir() if p.is_file() and p.stem == CLIP]
+    if _c: VIDEO = _c[0]
 OUTBASE = REPO / "outputs" / f"{CLIP}_tracked"
 GT = OUTBASE / "RIT_ground_truth"
 OUTDIR = OUTBASE / "step2_fixed_circle"; OUTDIR.mkdir(parents=True, exist_ok=True)
@@ -109,14 +112,35 @@ def iris_win_at(gray, cx, cy):
     rad = 0.5*max(st[best, cv2.CC_STAT_WIDTH], st[best, cv2.CC_STAT_HEIGHT])
     return float(max(W*0.05, rad*2.5))                       # window*0.6 ~ eye half-width
 
+# ================= SEEDING: MANUAL FIRST (required), with frame-keyed re-marks =================
+# CLINICAL WORKFLOW (Dr. K): begin ONLY by manually marking the iris (one or both eyes); then run. If the app
+# loses track of the iris along the clip, it STOPS and asks for a re-mark at that frame. A re-mark is just an
+# extra circle for that eye tagged with its "frame". The circle is ONLY a starting window for EllSeg (centre +
+# radius) -- never an iris outline/measurement, and no OpenCV iris fitting is done from it.
 MSF = REPO / "manual_seeds.json"
 manual = json.load(open(MSF, encoding="utf-8")) if MSF.exists() else {}
+ALLOW_AUTO = os.environ.get("RIT_ALLOW_AUTOSEED") == "1"      # opt-in only (batch convenience) -- not clinical
+STOP_ON_LOSS = os.environ.get("RIT_BATCH") != "1"            # RIT_BATCH=1 -> track through losses (old behaviour)
+LOSS_K = int(os.environ.get("RIT_LOSS_FRAMES", 12))          # consecutive lost frames = sustained loss -> STOP
+g0 = cv2.cvtColor(frame0, cv2.COLOR_BGR2GRAY)
+
+def _marks_from(v):
+    """One eye's manual entry -> time-sorted marks {frame,cx,cy,ow,oh,src}. Accepts a single circle dict,
+    a LIST of circle dicts (re-marks at different frames), or a legacy [x,y] point."""
+    if isinstance(v, dict): raw = [v]
+    elif isinstance(v, list) and v and isinstance(v[0], dict): raw = v
+    else: raw = [{"cx": v[0], "cy": v[1], "frame": 0, "source": "manual_point_seed"}]
+    out = []
+    for m in raw:
+        rr = m.get("r"); ow = max(W*0.05, rr*2.5) if rr else iris_win_at(g0, m["cx"], m["cy"])
+        out.append(dict(frame=int(m.get("frame", 0)), cx=m["cx"], cy=m["cy"], ow=ow, oh=ow,
+                        src=m.get("source", "manual_circle_seed")))
+    return sorted(out, key=lambda m: m["frame"])
+
 if CLIP in manual:
-    g0 = cv2.cvtColor(frame0, cv2.COLOR_BGR2GRAY); ent = manual[CLIP]; eyes = {}
-    for ek in ("R", "L"):
-        if ek in ent:                                        # 1 or 2 eyes -- use the clearer iris if only one
-            sx, sy = ent[ek]; ow = iris_win_at(g0, sx, sy); eyes[ek] = dict(ow=ow, oh=ow, seed=(sx, sy))
-    print(f"seeds: MANUAL {list(eyes)}")
+    ent = manual[CLIP]; eyes = {ek: dict(marks=_marks_from(ent[ek])) for ek in ("R", "L") if ek in ent}
+    nmk = sum(len(e["marks"]) for e in eyes.values())
+    print(f"seeds: MANUAL {list(eyes)}  ({nmk} mark(s); re-marks applied on track loss)")
 elif (GT / "meta.json").exists():
     meta = json.load(open(GT / "meta.json", encoding="utf-8"))
     def src_pts(e):
@@ -129,28 +153,66 @@ elif (GT / "meta.json").exists():
         for v in ents:
             (cx, cy), (a1, a2), ang = cv2.fitEllipse(src_pts(v)); ws.append(max(a1, a2)); hs.append(min(a1, a2))
         (cx0, cy0), _, _ = cv2.fitEllipse(src_pts(ents[0]))
-        eyes[ek] = dict(ow=float(np.median(ws)), oh=float(np.median(hs)), seed=(cx0, cy0))
+        eyes[ek] = dict(marks=[dict(frame=0, cx=cx0, cy=cy0, ow=float(np.median(ws)), oh=float(np.median(hs)), src="clinician_orbit_marks")])
     print("seeds: clinician orbit marks")
+elif ALLOW_AUTO:
+    a = auto_seed(frame0)
+    eyes = {ek: dict(marks=[dict(frame=0, cx=a[ek]["seed"][0], cy=a[ek]["seed"][1], ow=a[ek]["ow"], oh=a[ek]["oh"], src="auto_seed")]) for ek in a}
+    print("seeds: AUTO (FALLBACK -- NOT clinician-marked; unreliable) " + ", ".join(f"{ek}={tuple(round(x) for x in a[ek]['seed'])}" for ek in a))
 else:
-    eyes = auto_seed(frame0); print(f"seeds: AUTO  R={tuple(round(v) for v in eyes['R']['seed'])} L={tuple(round(v) for v in eyes['L']['seed'])}")
+    print(f"\n*** NO MANUAL IRIS SEED for '{CLIP}'. ***")
+    print("  The clinical workflow REQUIRES marking the iris first. Open tools/rit_iris_seed_marker.html, mark the")
+    print("  iris circle of one or both eyes, add the block to manual_seeds.json, then re-run.")
+    print("  (Set RIT_ALLOW_AUTOSEED=1 only for batch convenience -- auto-seed is unreliable, not a clinical read.)")
+    sys.exit(2)
 
 cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-state = {ek: dict(cx=e["seed"][0], cy=e["seed"][1], lost=0) for ek, e in eyes.items()}
+state = {}
+for ek, e in eyes.items():
+    m0 = e["marks"][0]
+    state[ek] = dict(cx=m0["cx"], cy=m0["cy"], ow=m0["ow"], oh=m0["oh"], src=m0["src"],
+                     lost=0, consec_bad=0, loss_start=None, midx=0)
 MAXF = int(os.environ.get("RIT_MAXF", 100000))
 rows = []; found = {ek: 0 for ek in eyes}; fi = -1
+
+def write_csv():
+    with open(OUTDIR / "ellseg_centroid.csv", "w", newline="", encoding="utf-8") as fp:
+        w = csv.writer(fp)
+        w.writerow(["frame", "eye", "cx", "cy", "status", "scl_left", "scl_right", "disc_area", "seed_source"]); w.writerows(rows)
+
 while True:
     ok, frame = cap.read()
     if not ok or fi+1 >= MAXF: break
     fi += 1; gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     for ek, e in eyes.items():
-        st = state[ek]; grow = 1.0 + min(st["lost"], 6)*0.25
-        r = region(frame, gray, st["cx"], st["cy"], e["ow"]*0.6*grow, e["oh"]*0.6*grow, W, H)
-        if r is None:
-            st["lost"] += 1; rows.append((fi, ek, "", "", "needs_rescue", "", "", "")); continue
-        st.update(cx=r["cx"], cy=r["cy"], lost=0); found[ek] += 1
-        rows.append((fi, ek, round(r["cx"], 2), round(r["cy"], 2), "ok", r["nL"], r["nR"], r["area"]))
+        st = state[ek]; marks = e["marks"]
+        while st["midx"]+1 < len(marks) and marks[st["midx"]+1]["frame"] <= fi:    # apply clinician re-mark(s)
+            st["midx"] += 1; m = marks[st["midx"]]
+            st.update(cx=m["cx"], cy=m["cy"], ow=m["ow"], oh=m["oh"], src=m["src"], lost=0, consec_bad=0, loss_start=None)
+            print(f"  re-mark applied: {ek} eye re-seeded at frame {fi} (mark frame {m['frame']})")
+        grow = 1.0 + min(st["lost"], 6)*0.25
+        r = region(frame, gray, st["cx"], st["cy"], st["ow"]*0.6*grow, st["oh"]*0.6*grow, W, H)
+        rad = st["ow"]/2.5
+        bad = (r is None) or (np.hypot(r["cx"]-st["cx"], r["cy"]-st["cy"]) > 3.0*rad)   # lost, or jumped to wrong spot
+        if bad:
+            if st["consec_bad"] == 0: st["loss_start"] = fi
+            st["lost"] += 1; st["consec_bad"] += 1
+            rows.append((fi, ek, "", "", "needs_rescue", "", "", "", st["src"]))
+            remark_ahead = any(mm["frame"] >= st["loss_start"] for mm in marks[st["midx"]+1:])
+            if STOP_ON_LOSS and st["consec_bad"] >= LOSS_K and not remark_ahead:
+                write_csv(); cap.release()
+                imgp = OUTDIR / f"loss_frame_{st['loss_start']}.png"; cv2.imwrite(str(imgp), frame)
+                print(f"\n*** TRACK LOST -- STOPPED (eye {ek}) ***")
+                print(f"  iris lost from frame {st['loss_start']} (confirmed after {LOSS_K} lost frames, at {fi}).")
+                print(f"  RE-MARK the {ek} iris around frame {st['loss_start']} in tools/rit_iris_seed_marker.html")
+                print(f"  (navigate to that frame, mark the circle), then add it to manual_seeds.json as a re-mark:")
+                print(f'     "{CLIP}": {{ "{ek}": [ <existing mark>, {{"cx":_, "cy":_, "r":_, "frame": {st["loss_start"]}, "source": "manual_circle_seed"}} ] }}')
+                print(f"  Frame to mark on: {imgp}   Partial trace written ({fi+1} frames). Re-run to resume.")
+                sys.exit(3)
+        else:
+            st.update(cx=r["cx"], cy=r["cy"], lost=0, consec_bad=0, loss_start=None); found[ek] += 1
+            rows.append((fi, ek, round(r["cx"], 2), round(r["cy"], 2), "ok", r["nL"], r["nR"], r["area"], st["src"]))
 cap.release()
-with open(OUTDIR / "ellseg_centroid.csv", "w", newline="", encoding="utf-8") as fp:
-    w = csv.writer(fp); w.writerow(["frame", "eye", "cx", "cy", "status", "scl_left", "scl_right", "disc_area"]); w.writerows(rows)
+write_csv()
 print("EllSeg centroid found:", found, "of", NF)
 print("csv ->", OUTDIR / "ellseg_centroid.csv")

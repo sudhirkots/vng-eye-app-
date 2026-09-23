@@ -1,0 +1,6 @@
+{
+  "gaze-evoked nystagmus in pontine glioma": {
+    "R": {"cx": 669, "cy": 682, "r": 66, "frame": 1, "eye": "R", "source": "manual_circle_seed"},
+    "L": {"cx": 1357, "cy": 644, "r": 65, "frame": 1, "eye": "L", "source": "manual_circle_seed"}
+  }
+}
