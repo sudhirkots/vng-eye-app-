@@ -1,4 +1,4 @@
-# Where the sample videos live
+# Where the videos and the marked data live
 
 The nystagmus clips are **not in this repository** and never should be. They are
 patient video, and this repo is public.
@@ -15,6 +15,24 @@ deliberately **outside** any git repository — nothing here can ever pick it up
 **Working copy:** `samples/` in this folder holds the same 28 files so the tools can
 run without reaching across to OneDrive. It is gitignored. Treat it as disposable —
 if it is ever lost, copy it back from the OneDrive folder above.
+
+## Hand-marked ground truth and analysis results
+
+```
+C:\Users\sudhi\OneDrive\Documents\AI apps made by me\VNG-EYE app analysis data\
+```
+
+315 files, 25 MB — every `.json`, `.csv`, `.md`, `.log` and `.html` that was under the
+old `outputs/` tree, with the folder structure preserved.
+
+This is the part of `outputs/` that is **not** regenerable. In particular
+`nystagmus at rest to left in right vestibular neuritis_tracked/RIT_ground_truth/polygons.json`
+holds 39 hand-marked iris polygons — re-creating it means marking frames by hand again.
+Alongside it are `meta.json`, `evaluation.json`, `learned_evaluation.json`, the
+`MARKING_INSTRUCTIONS.md` files, and the `orbit_lock_points.csv` probe outputs.
+
+What was left behind was 7.9 GB of regenerable render output: mask and overlay PNGs,
+review MP4s, and a 228 MB trained `model_rf.joblib` that retrains from `polygons.json`.
 
 ## Rules
 
