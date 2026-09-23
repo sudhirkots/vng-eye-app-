@@ -1,9 +1,11 @@
-"""BALANCE BAND — leg-worn IMU to evaluate the balance system of anyone (Dr. K, 2026-09-23).
+"""BALANCE BAND — waist-worn IMU to evaluate the balance system of anyone (Dr. K, 2026-09-23).
 
-A band on the shin carries an IMU (accelerometer + gyroscope). With the feet together, the shin
-tilts with the whole body over the ankles (inverted pendulum), so the shin angle tracks the body's centre of
-gravity (COG) angle. For anyone: a healthy person, someone who feels unsteady, or any patient (vestibular,
-neuropathy, cerebellar, parkinsonism, the elderly, ...).
+A belt over the lower back (L3–L5, near the body's centre of gravity) carries an IMU (accelerometer +
+gyroscope). Its tilt closely tracks the centre of gravity (COG) angle, whether the person corrects sway at
+the ankles or at the hips. (A shin band, --site shin, is also supported, but it only sees the ankle part of
+sway; a second shin band alongside the waist, to tell ankle from hip strategy, is planned.)
+For anyone: a healthy person, someone who feels unsteady, or any patient (vestibular, neuropathy,
+cerebellar, parkinsonism, the elderly, ...).
 
 SESSION (one CSV per step, all in one folder, band NOT moved between steps):
 
@@ -24,7 +26,8 @@ the person's OWN limit of stability the sway used up. Qualitative read + honest 
 data give INSUFFICIENT / UNCLEAR, never a false "normal".
 
 Usage:
-    python balance_band/sway_analysis.py <session_folder> [--forward +x --left +y] [--json out.json]
+    python balance_band/sway_analysis.py <session_folder> [--site waist|shin] [--forward +x --left +y]
+                                         [--json out.json]
     python balance_band/sway_analysis.py <empty_folder> --demo backward     # synthetic session
     (demo patterns: normal, vestibular, somatosensory, vision, backward)
 
@@ -40,6 +43,7 @@ CONDITIONS = ("eo_firm", "ec_firm", "eo_foam", "ec_foam")
 LABEL = {"eo_firm": "Eyes open, firm", "ec_firm": "Eyes closed, firm",
          "eo_foam": "Eyes open, foam", "ec_foam": "Eyes closed, foam"}
 DIRS = ("forward", "backward", "left", "right")
+SITES = ("waist", "shin")
 
 # ---- quality gates (failing these -> INSUFFICIENT, never "normal") ----
 MIN_FS_HZ = 20.0
@@ -51,9 +55,7 @@ MIN_LOS_DEG = 1.0          # a lean smaller than this = direction not attempted
 
 # ---- signal processing ----
 COMP_TAU_S = 1.0           # complementary filter: gyro below ~1 s, gravity above
-SWAY_LP_HZ = 2.5           # postural sway lives below ~2 Hz; leg tremor (e.g. 4-6 Hz rest tremor) is removed
-TREMOR_BAND = (3.5, 8.0)
-TREMOR_MIN_DPS = 1.5       # RMS angular velocity in the tremor band worth reporting
+SWAY_LP_HZ = 2.5           # postural sway lives below ~2 Hz; faster content is sensor noise / jolts
 
 # ---- PROVISIONAL interpretation thresholds (calibrate on healthy controls from THIS band) ----
 RATIO_INCREASED = 2.0      # removing ONE sense doubles the sway
@@ -144,19 +146,6 @@ def sway_angles(tr, B, R, gyro_rad=False, lp=True):
         ap, ml = lowpass(ap, fs, SWAY_LP_HZ), lowpass(ml, fs, SWAY_LP_HZ)
     return ap, ml, ap_rate, ml_rate, np.linalg.norm(acc, axis=1)
 
-def tremor(rate_ap, rate_ml, fs):
-    """Dominant frequency and RMS angular velocity (deg/s) in the tremor band, or None."""
-    if fs < 2 * TREMOR_BAND[1] or len(rate_ap) < int(4 * fs):
-        return None
-    best = None
-    for r in (rate_ap, rate_ml):
-        x = (r - r.mean()) * np.hanning(len(r)); P = np.abs(np.fft.rfft(x))**2
-        f = np.fft.rfftfreq(len(r), 1 / fs); band = (f >= TREMOR_BAND[0]) & (f <= TREMOR_BAND[1])
-        rms = math.sqrt(2 * P[band].sum() / (np.sum(np.hanning(len(r))**2) * len(r)))
-        if best is None or rms > best[1]:
-            best = (float(f[band][np.argmax(P[band])]), rms)
-    return best if best[1] >= TREMOR_MIN_DPS else None
-
 def pct(x, q):
     return float(np.percentile(x, q)) if len(x) else float("nan")
 
@@ -214,10 +203,6 @@ def analyse_trial(tr, B, R, los=None, gyro_rad=False):
     g = np.median(amag)
     if g > 0 and stop > 1 and np.mean(np.abs(amag[seg] / g - 1.0) > 0.25) > 0.05:
         out["notes"].append("large jolts (stepping, or the band slipping?) — angles less reliable")
-    tr_ = tremor(ap_rate[seg], ml_rate[seg], fs)
-    if tr_:
-        out["tremor_hz"], out["tremor_dps"] = round(tr_[0], 1), round(tr_[1], 1)
-        out["notes"].append(f"leg tremor ~{tr_[0]:.1f} Hz (filtered out of the sway angle)")
 
     if fell:
         out["status"] = "fell"; out["fall_at_s"] = round(float(t[stop] - t[0]), 1)
@@ -264,11 +249,13 @@ def analyse_trial(tr, B, R, los=None, gyro_rad=False):
 
 
 # ------------------------------------------------------------------ session
-def analyse_session(folder, forward="+x", left="+y", gyro_rad=False):
+def analyse_session(folder, forward="+x", left="+y", gyro_rad=False, site="waist"):
     folder = Path(folder); B = body_matrix(forward, left)
     los_tr = load_trial(folder / "los.csv")
     trials = {c: load_trial(folder / f"{c}.csv") for c in CONDITIONS}
-    res = {"los": None, "trials": {}, "comparisons": {}, "findings": [], "caveats": []}
+    if site not in SITES:
+        raise ValueError(f"site must be one of {SITES}")
+    res = {"site": site, "los": None, "trials": {}, "comparisons": {}, "findings": [], "caveats": []}
 
     # CENTRE = quiet stance at the start of the LOS recording (else the start of eyes-open-firm)
     ref, secs = (los_tr, CENTRE_S) if los_tr is not None else (trials["eo_firm"], 1.0)
@@ -353,10 +340,6 @@ def interpret(res):
             if "mean_ml_deg" in T[c] and abs(T[c]["mean_ml_deg"] - m0) >= LEAN_DEG]
     if len(side) >= 2 and abs(sum(side)) == len(side):
         F.append(f"Consistent lean to the person's {'LEFT' if side[0] > 0 else 'RIGHT'} when senses are removed.")
-    tremors = [T[c]["tremor_hz"] for c in CONDITIONS if "tremor_hz" in T[c]]
-    if tremors:
-        F.append(f"Leg tremor ~{np.median(tremors):.1f} Hz in {len(tremors)} trial(s) — removed from the sway "
-                 "angle by filtering (it is not sway).")
 
     missing = [LABEL[c] for c in CONDITIONS if not usable(c)]
     if missing:
@@ -382,8 +365,12 @@ def interpret(res):
 
 
 def _caveats(res):
-    res["caveats"].append("Leg band: sees the ankle (inverted-pendulum) component of sway. On foam or near the "
-                          "limits people bend at the hips, which a shin sensor under-reads.")
+    if res.get("site") == "shin":
+        res["caveats"].append("Shin band: sees only the ankle (inverted-pendulum) part of sway. On foam or near the "
+                              "limits people bend at the hips, which a shin sensor under-reads — use the waist band.")
+    else:
+        res["caveats"].append("Waist band: measures the centre of gravity's tilt but cannot say whether the person "
+                              "corrected at the ankles or the hips (that needs a second, shin band).")
     res["caveats"].append("Foam DEGRADES rather than abolishes foot/ankle sensation, so eyes-closed-on-foam "
                           "leans mainly — not purely — on vestibular input.")
     res["caveats"].append("Thresholds are PROVISIONAL (x%.1f one sense, x%.1f eyes-closed-foam, %d%% of limit, "
@@ -393,7 +380,7 @@ def _caveats(res):
 
 # ------------------------------------------------------------------ report
 def report_text(res):
-    out = ["BALANCE BAND — leg IMU, standing balance", ""]
+    out = [f"BALANCE BAND — {res.get('site', 'waist')} IMU, standing balance", ""]
     L = res["los"]
     if L:
         out.append("Step 1 — Limits of stability (how far the COG can lean from centre without stepping):")
@@ -421,7 +408,7 @@ def report_text(res):
 
 
 # ------------------------------------------------------------------ synthetic demo sessions
-# per condition: (AP amp, ML amp[, fall time[, ML lean]]) in deg;  "los": F, B, L, R limits;  "tremor": Hz
+# per condition: (AP amp, ML amp[, fall time[, ML lean]]) in deg;  "los": F, B, L, R limits
 DEMO = {
     "normal":        {"los": (7, 5, 5, 5), "eo_firm": (0.6, 0.4), "ec_firm": (0.8, 0.5),
                       "eo_foam": (0.9, 0.7), "ec_foam": (1.6, 1.1)},
@@ -431,7 +418,7 @@ DEMO = {
                       "eo_foam": (1.9, 1.5), "ec_foam": (3.0, 2.5)},
     "vision":        {"los": (7, 5, 5, 5), "eo_firm": (0.6, 0.4), "ec_firm": (1.9, 1.5),
                       "eo_foam": (0.9, 0.7), "ec_foam": (2.0, 1.6)},
-    "backward":      {"los": (5, 1.5, 3.5, 3.5), "tremor": 5.0, "eo_firm": (0.7, 0.5), "ec_firm": (1.0, 0.7),
+    "backward":      {"los": (5, 1.5, 3.5, 3.5), "eo_firm": (0.7, 0.5), "ec_firm": (1.0, 0.7),
                       "eo_foam": (1.1, 0.8), "ec_foam": (2.2, 1.6, 11.0)},
 }
 
@@ -443,9 +430,7 @@ def _smooth_noise(n, fs, rng, fc=0.6):
         x = y
     x = x[-n:]; return x / (x.std() + 1e-12)
 
-def _write(path, t, ap, ml, fall, rng, tremor_hz=None):
-    if tremor_hz:     # tremor of the leg = small fast rotation, mostly seen by the gyro
-        ap = ap + 0.25 * np.sin(2 * np.pi * tremor_hz * t)
+def _write(path, t, ap, ml, fall, rng):
     apr, mlr = np.radians(ap), np.radians(ml)
     aF, aL = -np.sin(apr), -np.sin(mlr); aU = np.sqrt(np.clip(1 - aF**2 - aL**2, 0, 1))
     acc = np.stack([aF, aL, aU], 1) + 0.004 * rng.standard_normal((len(t), 3))
@@ -458,7 +443,7 @@ def _write(path, t, ap, ml, fall, rng, tremor_hz=None):
 
 def write_demo(pattern, folder, fs=100.0, dur=20.0, seed=1):
     folder = Path(folder); folder.mkdir(parents=True, exist_ok=True)
-    rng = np.random.default_rng(seed); spec = DEMO[pattern]; trem = spec.get("tremor")
+    rng = np.random.default_rng(seed); spec = DEMO[pattern]
     # limits of stability: centre 3 s, then F, B, L, R leans (2 s out, 1 s hold, 2 s back, 1 s rest)
     lf, lb, ll, lr = spec["los"]; seq = [(lf, 0), (-lb, 0), (0, ll), (0, -lr)]
     n = int((3 + 6 * len(seq)) * fs); t = np.arange(n) / fs
@@ -467,7 +452,7 @@ def write_demo(pattern, folder, fs=100.0, dur=20.0, seed=1):
         s = 3 + 6 * k; x = np.clip((t - s) / 2, 0, 1) - np.clip((t - s - 3) / 2, 0, 1)
         prof = 0.5 - 0.5 * np.cos(np.pi * x)
         ap += dap * prof; ml += dml * prof
-    _write(folder / "los.csv", t, ap, ml, np.zeros(n, int), rng, trem)
+    _write(folder / "los.csv", t, ap, ml, np.zeros(n, int), rng)
     for c in CONDITIONS:
         s = spec[c]; amp_ap, amp_ml = s[0], s[1]
         fall_t = s[2] if len(s) > 2 else None; lean = s[3] if len(s) > 3 else 0.0
@@ -482,22 +467,24 @@ def write_demo(pattern, folder, fs=100.0, dur=20.0, seed=1):
             else:
                 ml = ml - 6.0 * ramp               # falls to the right
             fall[k:] = 1
-        _write(folder / f"{c}.csv", t, ap, ml, fall, rng, trem)
+        _write(folder / f"{c}.csv", t, ap, ml, fall, rng)
     return folder
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(description="Leg-band standing-balance analysis")
+    p = argparse.ArgumentParser(description="Balance-band standing-balance analysis")
     p.add_argument("folder", help="session folder: los.csv, eo_firm.csv, ec_firm.csv, eo_foam.csv, ec_foam.csv")
     p.add_argument("--forward", default="+x", help="sensor axis pointing to the person's front (e.g. +x, -z)")
     p.add_argument("--left", default="+y", help="sensor axis pointing to the person's LEFT")
+    p.add_argument("--site", default="waist", choices=SITES,
+                   help="where the band is worn: waist (lower back, recommended) or shin")
     p.add_argument("--gyro-units", default="deg", choices=["deg", "rad"])
     p.add_argument("--demo", choices=sorted(DEMO), help="first write a synthetic session of this pattern")
     p.add_argument("--json", help="also write the full result to this JSON file")
     a = p.parse_args(argv)
     if a.demo:
         write_demo(a.demo, a.folder)
-    res = analyse_session(a.folder, a.forward, a.left, a.gyro_units == "rad")
+    res = analyse_session(a.folder, a.forward, a.left, a.gyro_units == "rad", a.site)
     print(report_text(res))
     if a.json:
         Path(a.json).write_text(json.dumps(res, indent=2, default=float), encoding="utf-8")

@@ -42,12 +42,12 @@ def test_axis_remap():
     assert abs(ap[-1] - 4) < 0.1 and abs(ml[-1]) < 0.1
 
 
-def test_lowpass_removes_tremor_keeps_sway():
+def test_lowpass_removes_noise_keeps_sway():
     fs = 100.0; t = np.arange(2000) / fs
-    sway, trem = np.sin(2 * np.pi * 0.3 * t), 0.5 * np.sin(2 * np.pi * 5.0 * t)
-    y = S.lowpass(sway + trem, fs, S.SWAY_LP_HZ)
+    sway, noise = np.sin(2 * np.pi * 0.3 * t), 0.5 * np.sin(2 * np.pi * 5.0 * t)
+    y = S.lowpass(sway + noise, fs, S.SWAY_LP_HZ)
     mid = slice(200, -200)
-    assert np.max(np.abs(y[mid] - sway[mid])) < 0.1       # 0.3 Hz sway kept, no time shift; 5 Hz tremor gone
+    assert np.max(np.abs(y[mid] - sway[mid])) < 0.1       # 0.3 Hz sway kept, no time shift; 5 Hz noise gone
 
 
 def test_limits_of_stability_measured():
@@ -78,11 +78,28 @@ def test_fails_on_vestibular_alone():
     assert r["trials"]["ec_foam"]["los_used_pct"] == 100
 
 
-def test_reduced_backward_limit_tremor_and_fall():
+def test_reduced_backward_limit_and_fall():
     r = S.analyse_session(_session("backward"))
     assert any("BACKWARD limit" in f for f in r["findings"])
     assert r["trials"]["ec_foam"]["fall_direction"] == "backward"
-    assert abs(r["trials"]["eo_firm"]["tremor_hz"] - 5.0) < 0.5
+
+
+def test_waist_is_default_site():
+    r = S.analyse_session(_session("normal"))
+    assert r["site"] == "waist" and any(c.startswith("Waist band") for c in r["caveats"])
+
+
+def test_shin_site_warns_about_hip_strategy():
+    r = S.analyse_session(_session("normal"), site="shin")
+    assert r["site"] == "shin" and any("hips" in c for c in r["caveats"] if c.startswith("Shin band"))
+
+
+def test_unknown_site_rejected():
+    try:
+        S.analyse_session(_session("normal"), site="head")
+    except ValueError:
+        return
+    raise AssertionError("site='head' should be rejected")
 
 
 def test_missing_everything_is_insufficient():
