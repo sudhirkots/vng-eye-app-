@@ -49,15 +49,32 @@ turns them into a bedside read.
 - **Falls**: when the examiner pressed the button, and **which way** they fell.
 - **Honest confidence**: a missing or poor recording gives **INSUFFICIENT / UNCLEAR**, never "normal".
 
-## The device (hardware brief)
-- 6-axis IMU. A 9-axis part with on-chip fusion is fine but not needed.
-- Small microcontroller with Bluetooth LE, a rechargeable battery and an elastic strap.
-- Sample at **≥ 100 Hz**. The software rejects < 20 Hz and warns below 50 Hz.
-- **Examiner button**: press when the person loses balance, steps, opens the eyes or grabs. This writes
-  `fall = 1` from that sample on.
+## The device (hardware)
+Full details in [`hardware/`](hardware/): parts list with Indian sources (`BOM.md`), the case design brief
+(`DESIGN_BRIEF.md`) and a parametric first-draft case (`case.scad`, not yet rendered or printed).
+
+**One waist unit:**
+| Part | Choice |
+|------|--------|
+| Board | **Seeed XIAO nRF52840 Sense**: built-in 6-axis IMU, Bluetooth LE, LiPo charger, USB-C. Sold in India (~₹2,300). |
+| Battery | **3.7 V single-cell LiPo, 300–500 mAh, with protection circuit** (e.g. 502535), soldered to the board's battery pads, charged by USB-C. Plus a small **slide switch**, since the board has no power switch. |
+| Case | Small **3D-printed PETG** pod (draft ≈ 40 × 56 × 16 mm). The belt passes **through** it so it cannot slide or rotate; the board lies flat and rigid inside; **"UP" and "L" arrows** on the lid so it is always worn the same way round. |
+| Belt | **40 mm non-stretch webbing** with Velcro, pod centred over L3–L5. Elastic belts let the pod bounce, so avoid them. |
+| Foam | One standard medium-density balance pad (e.g. Airex), the same for every person. |
+
+Roughly ₹3,000–3,500 per unit, plus the foam pad once.
+
+**What the band must do:**
+- Sample the IMU at **≥ 100 Hz** with reliable time stamps and stream over Bluetooth. The software rejects
+  < 20 Hz and warns below 50 Hz.
+- **Examiner button** on the laptop or phone (or a foot pedal), not on the band, because the examiner's
+  hands are guarding the person. Pressing it writes `fall = 1` from that sample on.
 - One CSV per step: `t, ax, ay, az, gx, gy, gz, fall`. Units: s, g (or m/s²), deg/s.
-- Wear it as a belt with the sensor centred over the lower back (L3–L5), snug, over thin clothing.
-  **Do not move it between the five steps**, because the centre from step 1 is the reference for all of them.
+- Wear it snug over thin clothing. **Do not move it between the five steps**, because the centre from
+  step 1 is the reference for all of them.
+
+**Safety:** protected LiPo cells only; never use a swollen or dented cell; charge on a table, not while
+worn.
 
 ## Run it
 ```
@@ -82,7 +99,8 @@ Needs only Python + numpy.
   fully, so a small limit can mean "would not" as well as "could not".
 
 ## Next steps
-1. Build the waist band, confirm its axis directions and sample rate, and record a session on myself.
+1. Finalise the case (Claude Design), print it, build the waist band, write the firmware and the recording
+   app, confirm the axis directions and sample rate, and record a session on myself.
 2. Record healthy age-matched controls → replace the provisional thresholds with real limits.
 3. Record people who feel unsteady and known patient groups (vestibular loss, neuropathy, cerebellar,
    parkinsonism ON and OFF medication, older fallers) → check that each gives the expected pattern.
