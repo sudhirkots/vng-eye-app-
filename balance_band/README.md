@@ -1,6 +1,6 @@
 # Balance Band — a waist-worn IMU to evaluate anyone's balance system
 
-*Separate project from the nystagmus detector. It only lives in this repository for now.*
+*Separate project from the nystagmus detector. It only lives in this repository for now. Current state and next steps: [`HANDOFF.md`](HANDOFF.md).*
 
 **Who it is for:** anyone. A healthy person (baseline, or as a control), someone who simply feels unsteady,
 or any patient with a balance complaint: vestibular, peripheral neuropathy, cerebellar, parkinsonism, the
@@ -44,8 +44,23 @@ turns them into a bedside read.
   - **sway angle** (AP and ML);
   - **× reference**: how many times the eyes-open-firm sway;
   - **% of limit**: how much of the person's *own* limit of stability the sway used. A fall counts as 100 %.
-- **Pattern**: vision-dependent / somatosensory-dependent / both / fails on vestibular input alone / no
-  marked dependence.
+- **Sensory ratios: where to focus rehabilitation.** Each condition gets a **stability score out of 100**
+  (100 = no sway; 0 = the sway reached the person's own limit, or they fell). Each harder condition is then
+  divided by eyes-open-firm, giving three percentages:
+
+  | Ratio | Condition ÷ eyes open, firm | How well they balance using mainly… | Provisional cut-off |
+  |-------|-----------------------------|-------------------------------------|---------------------|
+  | **Somatosensory** | eyes closed, firm | feet and joints | 80 % |
+  | **Visual** | eyes open, foam | vision | 70 % |
+  | **Vestibular** | eyes closed, foam | the vestibular system | 50 % |
+
+  A ratio below its cut-off is marked **LOW**, and the report names it under **"Focus for rehabilitation"**.
+  The three are separate abilities and **do not add up to 100 %**. Each sense has its own cut-off because
+  eyes-closed foam is the hardest condition even for healthy people.
+  This is the same method as the Sensory Organisation Test's sensory ratios, applied to our four conditions.
+- **Overall verdict**: WEAK SOMATOSENSORY / VISUAL / VESTIBULAR USE (or a combination), NO WEAK SENSE, or
+  UNSTEADY EVEN WITH ALL SENSES AVAILABLE (eyes-open-firm itself is poor, so no single sense is to blame).
+  "Weak somatosensory use" is the same person who *relies on vision*: the ratio names the sense to train.
 - **Falls**: when the examiner pressed the button, and **which way** they fell.
 - **Honest confidence**: a missing or poor recording gives **INSUFFICIENT / UNCLEAR**, never "normal".
 
@@ -84,7 +99,7 @@ Four parts, all in this folder:
 | **Firmware** on the band | `firmware/balance_band_fw/` (setup in `firmware/README.md`) | Written; **not yet compiled or run on a board** |
 | **Recording app** (Chrome page + small local server) | `recorder/` | Tested end-to-end with the simulated band |
 | **Analysis** | `sway_analysis.py` | Tested on made-up recordings |
-| **Tests** | `test_sway_analysis.py`, `recorder/test_server.py`, `recorder/test_protocol.js` | 20 + 3 + 4 pass |
+| **Tests** | `test_sway_analysis.py`, `recorder/test_server.py`, `recorder/test_protocol.js` | 22 + 3 + 4 pass |
 
 ### Recording a session
 1. Switch the band on and strap it over the lower back — **any way round**; the software works out its
@@ -116,7 +131,8 @@ otherwise +x forward / +y left is assumed and the report warns. Needs Python 3 +
 
 ## Honest limits
 - **Thresholds are PROVISIONAL**, until we record healthy controls on this band:
-  - × 2 for losing one sense, × 4 for eyes closed on foam;
+  - sensory-ratio cut-offs: somatosensory 80 %, visual 70 %, vestibular 50 %;
+  - without step 1 (no ratios), the cruder fallback: × 2 sway for losing one sense, × 4 on eyes-closed foam;
   - 70 % of the limit counts as near the edge;
   - backward limit < 50 % of forward counts as reduced;
   - one side < 60 % of the other counts as asymmetric.
@@ -124,6 +140,9 @@ otherwise +x forward / +y left is assumed and the report warns. Needs Python 3 +
   person produced it. A second, shin band will add that.
 - **Foam degrades, it does not abolish, foot sensation.** Eyes closed on foam leans *mainly* on vestibular
   input, not purely.
+- **"Visually dependent" in the sense of over-relying on vision (visual preference) is not measured.** That
+  needs a moving visual surround. The visual ratio says whether the person *can use* vision, not whether they
+  over-rely on it.
 - The limits of stability are *voluntary* leans. Someone who is frightened, slow or in pain may not lean
   fully, so a small limit can mean "would not" as well as "could not".
 

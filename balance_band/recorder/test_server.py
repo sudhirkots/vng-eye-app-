@@ -38,7 +38,7 @@ def _rows(csv_path):
 def test_full_session_via_api():
     httpd, url, root = _start()
     try:
-        demo = Path(tempfile.mkdtemp()); SA.write_demo("vestibular", demo, tilted=True)
+        demo = Path(tempfile.mkdtemp()); SA.write_demo("weak_vestibular", demo, tilted=True)
         code, j = _post(url + "/api/session", {"person": "PT 001", "site": "waist"})
         assert code == 200 and j["session"].startswith("PT-001_")
         sid = j["session"]
@@ -46,7 +46,7 @@ def test_full_session_via_api():
             code, j = _post(url + "/api/save", {"session": sid, "step": step, "rows": _rows(demo / f"{step}.csv")})
             assert code == 200 and j["status"][step]
         code, j = _post(url + "/api/analyse", {"session": sid})
-        assert code == 200 and "FAILS ON VESTIBULAR INPUT ALONE" in j["report"]
+        assert code == 200 and "WEAK VESTIBULAR USE" in j["report"] and "Sensory ratios" in j["report"]
         assert "found automatically" in j["report"]
         assert (root / sid / "report.txt").exists() and (root / sid / "result.json").exists()
     finally:

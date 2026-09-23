@@ -34,7 +34,7 @@ Usage:
     python balance_band/sway_analysis.py <session_folder> [--site waist|shin] [--json out.json]
                                          [--forward +x --left +y]      (only if los.csv has no phase labels)
     python balance_band/sway_analysis.py <empty_folder> --demo backward [--demo-tilted]  # synthetic session
-    (demo patterns: normal, vestibular, somatosensory, vision, backward)
+    (demo patterns: normal, weak_vestibular, weak_somatosensory, weak_visual, backward)
 
 Body frame: F = person's forward, L = person's LEFT, U = up.
   AP angle > 0 = COG FORWARD of centre;  ML angle > 0 = COG to the person's LEFT.
@@ -73,6 +73,21 @@ LOS_USED_HIGH = 70.0       # sway reaching >= 70 % of the person's limit -> near
 LOS_BACK_RATIO = 0.5       # backward limit < half the forward limit -> reduced backward stability
 LOS_SIDE_RATIO = 0.6       # one side < 60 % of the other -> side-to-side asymmetry
 LEAN_DEG = 2.0             # mean ML offset from the eyes-open-firm position that counts as a lean
+# Sensory ratios: each condition gets a stability score 0-100 (100 = no sway, 0 = sway reached the person's
+# own limit of stability, or a fall); each ratio = that condition's score / eyes-open-firm score.
+# Each sense has its OWN cut-off, because even healthy people do worst on eyes-closed foam.
+SENSORY = (("somatosensory", "ec_firm", "eyes closed, firm"),
+           ("visual", "eo_foam", "eyes open, foam"),
+           ("vestibular", "ec_foam", "eyes closed, foam"))
+RATIO_LOW = {"somatosensory": 80.0, "visual": 70.0, "vestibular": 50.0}   # PROVISIONAL, % of reference
+WEAK_TEXT = {
+    "somatosensory": "Weak use of SOMATOSENSORY input (feet and joints): balance drops when the eyes close on a "
+                     "firm floor — the person leans on vision.",
+    "visual": "Weak use of VISION: balance drops on foam with eyes open — the person leans on firm support "
+              "under the feet.",
+    "vestibular": "Weak use of VESTIBULAR input: balance drops, or fails, when mainly vestibular input is left "
+                  "(eyes closed on foam)."}
+REF_SCORE_MIN = 40.0       # below this the reference itself is too unsteady for ratios to mean much
 LOB_DEG = 8.0              # sway beyond this from the trial's centre, unmarked -> flag for review
 
 
@@ -349,6 +364,37 @@ def analyse_session(folder, forward=None, left=None, gyro_rad=False, site="waist
     return res
 
 
+def sensory_ratios(res):
+    """Stability score per condition and the three sensory ratios (%), into res['sensory']."""
+    T = res["trials"]
+    score = {}
+    for c in CONDITIONS:
+        if T[c]["status"] == "fell":
+            score[c] = 0.0
+        elif T[c]["status"] == "complete" and "los_used_pct" in T[c]:
+            score[c] = round(max(0.0, 100.0 - T[c]["los_used_pct"]), 1)
+    out = {"scores": score, "ratios": {}, "low": [], "notes": []}
+    res["sensory"] = out
+    if not res.get("los") or "limits_deg" not in res["los"]:
+        out["notes"].append("Sensory ratios need the limits-of-stability step (step 1) — not available.")
+        return
+    ref = score.get("eo_firm")
+    if not ref:
+        out["notes"].append("Sensory ratios need a usable eyes-open-firm trial — not available.")
+        return
+    if ref < REF_SCORE_MIN:
+        out["notes"].append(f"Unsteady even with eyes open on a firm floor (score {ref:.0f}/100), so the sensory "
+                            "ratios are unreliable — the problem is broader than one sense.")
+    for sense, c, _ in SENSORY:
+        if c in score:
+            r = round(min(100.0, 100.0 * score[c] / ref))
+            out["ratios"][sense] = r
+            if r < RATIO_LOW[sense]:
+                out["low"].append(sense)
+        else:
+            out["notes"].append(f"{sense.capitalize()} ratio: condition not usable ({T[c]['status']}).")
+
+
 def interpret(res):
     T, F, C, L = res["trials"], res["findings"], res["comparisons"], res["los"]
 
@@ -377,28 +423,31 @@ def interpret(res):
         if T[c]["status"] == "fell": return "fell"
         if T[c]["status"] != "complete" or T[c].get("sway_deg") is None: return None
         return round(T[c]["sway_deg"] / base, 2)
-    C["vision_ratio_ec_firm"] = rel("ec_firm")
-    C["somatosensory_ratio_eo_foam"] = rel("eo_foam")
-    C["vestibular_ratio_ec_foam"] = rel("ec_foam")
-
-    up = lambda r, thr: r == "fell" or (isinstance(r, float) and r >= thr)
-    vis = up(C["vision_ratio_ec_firm"], RATIO_INCREASED)
-    som = up(C["somatosensory_ratio_eo_foam"], RATIO_INCREASED)
-    ves = up(C["vestibular_ratio_ec_foam"], RATIO_EC_FOAM)
+    C["x_ref_ec_firm"] = rel("ec_firm")          # sway as a multiple of eyes-open-firm (descriptive)
+    C["x_ref_eo_foam"] = rel("eo_foam")
+    C["x_ref_ec_foam"] = rel("ec_foam")
 
     for c in ("ec_firm", "eo_foam", "ec_foam"):
         if T[c]["status"] == "fell":
             d = T[c].get("fall_direction")
             F.append(f"{LABEL[c]}: lost balance at {T[c]['fall_at_s']} s" + (f", falling {d}" if d else "") + ".")
-    if vis:
-        F.append("VISION matters a lot: sway rises markedly when the eyes close on a firm floor.")
-    if som:
-        F.append("SOMATOSENSORY input matters a lot: sway rises markedly on foam with eyes open.")
-    if ves and not vis and not som:
-        F.append("Steady while EITHER vision or firm support is available, but balance fails (sway rises "
-                 "markedly, or falls) when mainly vestibular input is left (eyes closed on foam).")
-    elif ves:
-        F.append("Eyes closed on foam (vestibular input alone) is also markedly worse.")
+
+    # --- which sense is used poorly (-> where to focus rehabilitation) ---
+    sensory_ratios(res)
+    S = res["sensory"]
+    if S["ratios"]:
+        weak = list(S["low"])
+    else:                     # no limits of stability: judge from the sway multiples instead (cruder)
+        up = lambda r, thr: r == "fell" or (isinstance(r, float) and r >= thr)
+        weak = [sense for sense, key, thr in (("somatosensory", "x_ref_ec_firm", RATIO_INCREASED),
+                                              ("visual", "x_ref_eo_foam", RATIO_INCREASED),
+                                              ("vestibular", "x_ref_ec_foam", RATIO_EC_FOAM)) if up(C[key], thr)]
+        if weak:
+            res["caveats"].append("Without step 1 the weak sense is judged from how many times the sway rose "
+                                  "(x ref), not from the sensory ratios — cruder.")
+    for x in weak:
+        F.append(WEAK_TEXT[x])
+
     near = [(c, T[c]["los_used_pct"], T[c]["los_used_dir"]) for c in CONDITIONS
             if T[c].get("los_used_pct", 0) >= LOS_USED_HIGH and T[c]["status"] == "complete"]
     for c, p, d in near:
@@ -413,22 +462,19 @@ def interpret(res):
     missing = [LABEL[c] for c in CONDITIONS if not usable(c)]
     if missing:
         res["caveats"].append("Not usable: " + ", ".join(missing) + " — comparisons with these are unclear.")
-    sensory = vis or som or ves
-    if ves and not vis and not som:
-        res["overall"] = "FAILS ON VESTIBULAR INPUT ALONE"
-    elif vis and som:
-        res["overall"] = "VISION + SOMATOSENSORY DEPENDENT (multisensory)"
-    elif vis:
-        res["overall"] = "VISION-DEPENDENT"
-    elif som:
-        res["overall"] = "SOMATOSENSORY-DEPENDENT"
+    ref_score = S["scores"].get("eo_firm")
+    if ref_score is not None and S["ratios"] and ref_score < REF_SCORE_MIN:
+        res["overall"] = "UNSTEADY EVEN WITH ALL SENSES AVAILABLE"
+    elif weak:
+        res["overall"] = "WEAK " + " + ".join(x.upper() for x in weak) + " USE"
     elif missing:
-        res["overall"] = "UNCLEAR — no increase on the usable trials, but some conditions are missing"
+        res["overall"] = "UNCLEAR — no weak sense on the usable trials, but some conditions are missing"
     else:
-        res["overall"] = "NO MARKED SENSORY DEPENDENCE on the conditions tested"
-        res["caveats"].append("Relative comparison only: someone who sways a lot in EVERY condition can still "
-                              "read 'no marked dependence' — look at the limits of stability and % used.")
-    if not sensory and any("limit" in f.lower() or "lean" in f.lower() for f in F):
+        res["overall"] = "NO WEAK SENSE on the conditions tested"
+        if not S["ratios"]:
+            res["caveats"].append("Relative comparison only: someone who sways a lot in EVERY condition can still "
+                                  "read 'no weak sense' — record step 1 so sway can be judged against their limits.")
+    if not weak and any("limit" in f.lower() or "lean" in f.lower() for f in F):
         res["overall"] += " — but see stability findings"
     _caveats(res)
 
@@ -442,9 +488,11 @@ def _caveats(res):
                               "corrected at the ankles or the hips (that needs a second, shin band).")
     res["caveats"].append("Foam DEGRADES rather than abolishes foot/ankle sensation, so eyes-closed-on-foam "
                           "leans mainly — not purely — on vestibular input.")
-    res["caveats"].append("Thresholds are PROVISIONAL (x%.1f one sense, x%.1f eyes-closed-foam, %d%% of limit, "
-                          "backward < %d%% of forward) until healthy controls are recorded on this band."
-                          % (RATIO_INCREASED, RATIO_EC_FOAM, LOS_USED_HIGH, 100 * LOS_BACK_RATIO))
+    res["caveats"].append("Thresholds are PROVISIONAL until healthy controls are recorded on this band: sensory-"
+                          "ratio cut-offs somatosensory %d%% / visual %d%% / vestibular %d%%, %d%% of limit = near "
+                          "the edge, backward limit < %d%% of forward."
+                          % (RATIO_LOW["somatosensory"], RATIO_LOW["visual"], RATIO_LOW["vestibular"],
+                             LOS_USED_HIGH, 100 * LOS_BACK_RATIO))
 
 
 # ------------------------------------------------------------------ report
@@ -474,6 +522,25 @@ def report_text(res):
     out.append("  (degrees; 90% = 5th–95th percentile; sway = combined AP/ML; x ref = vs eyes open firm;")
     out.append("   % limit = furthest excursion as % of that direction's limit of stability, F/B/L/R)")
     out += ["", f"OVERALL: {res['overall']}"] + [f"  • {x}" for x in res["findings"]]
+    S = res.get("sensory")
+    if S:
+        out += ["", "Sensory ratios — how well balance holds when relying mainly on one sense",
+                "(100% = as steady as eyes open on a firm floor):"]
+        if S["scores"]:
+            out.append("   Stability score /100:  " + "   ".join(
+                f"{LABEL[c]} {S['scores'][c]:.0f}" + (" (fell)" if res["trials"][c]["status"] == "fell" else "")
+                for c in CONDITIONS if c in S["scores"]))
+        for sense, c, how in SENSORY:
+            if sense in S["ratios"]:
+                flag = "   <- LOW" if sense in S["low"] else ""
+                out.append(f"   {sense.capitalize():<14}{S['ratios'][sense]:>4}%   ({how} vs eyes open, firm;"
+                           f" provisional cut-off {RATIO_LOW[sense]:.0f}%){flag}")
+        out += [f"   ({n})" for n in S["notes"]]
+        if S["ratios"]:
+            out.append("   Focus for rehabilitation: " + (", ".join(x.upper() for x in S["low"]) if S["low"]
+                       else "no single weak sense on these provisional cut-offs"))
+            out.append("   (The three are separate abilities and do not add up to 100%. Vestibular is naturally the"
+                       " lowest even in healthy people, hence its lower cut-off.)")
     if res["caveats"]:
         out += ["", "Caveats:"] + [f"  - {x}" for x in res["caveats"]]
     return "\n".join(out)
@@ -482,16 +549,16 @@ def report_text(res):
 # ------------------------------------------------------------------ synthetic demo sessions
 # per condition: (AP amp, ML amp[, fall time[, ML lean]]) in deg;  "los": F, B, L, R limits
 DEMO = {
-    "normal":        {"los": (7, 5, 5, 5), "eo_firm": (0.6, 0.4), "ec_firm": (0.8, 0.5),
-                      "eo_foam": (0.9, 0.7), "ec_foam": (1.6, 1.1)},
-    "vestibular":    {"los": (7, 5, 5, 5), "eo_firm": (0.6, 0.4), "ec_firm": (0.8, 0.5),
-                      "eo_foam": (0.9, 0.7), "ec_foam": (3.5, 3.0, 8.0)},
-    "somatosensory": {"los": (7, 5, 5, 5), "eo_firm": (0.6, 0.4), "ec_firm": (0.8, 0.6),
-                      "eo_foam": (1.9, 1.5), "ec_foam": (3.0, 2.5)},
-    "vision":        {"los": (7, 5, 5, 5), "eo_firm": (0.6, 0.4), "ec_firm": (1.9, 1.5),
-                      "eo_foam": (0.9, 0.7), "ec_foam": (2.0, 1.6)},
-    "backward":      {"los": (5, 1.5, 3.5, 3.5), "eo_firm": (0.7, 0.5), "ec_firm": (1.0, 0.7),
-                      "eo_foam": (1.1, 0.8), "ec_foam": (2.2, 1.6, 11.0)},
+    "normal":             {"los": (7, 5, 5, 5), "eo_firm": (0.6, 0.4), "ec_firm": (0.8, 0.5),
+                           "eo_foam": (0.9, 0.7), "ec_foam": (1.6, 1.1)},
+    "weak_vestibular":    {"los": (7, 5, 5, 5), "eo_firm": (0.6, 0.4), "ec_firm": (0.8, 0.5),
+                           "eo_foam": (0.9, 0.7), "ec_foam": (3.5, 3.0, 8.0)},
+    "weak_somatosensory": {"los": (7, 5, 5, 5), "eo_firm": (0.6, 0.4), "ec_firm": (3.2, 2.6),
+                           "eo_foam": (1.0, 0.8), "ec_foam": (1.8, 1.3)},
+    "weak_visual":        {"los": (7, 5, 5, 5), "eo_firm": (0.6, 0.4), "ec_firm": (0.9, 0.6),
+                           "eo_foam": (3.8, 3.2), "ec_foam": (1.8, 1.3)},
+    "backward":           {"los": (5, 1.5, 3.5, 3.5), "eo_firm": (0.7, 0.5), "ec_firm": (1.0, 0.7),
+                           "eo_foam": (1.1, 0.8), "ec_foam": (2.2, 1.6, 11.0)},
 }
 
 def _smooth_noise(n, fs, rng, fc=0.6):

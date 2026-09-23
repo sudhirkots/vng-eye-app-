@@ -59,21 +59,24 @@ def test_limits_of_stability_measured():
 
 def test_normal():
     r = S.analyse_session(_session("normal"))
-    assert r["overall"].startswith("NO MARKED SENSORY DEPENDENCE")
+    assert r["overall"].startswith("NO WEAK SENSE")
     assert all(r["trials"][c]["status"] == "complete" for c in S.CONDITIONS)
 
 
-def test_vision_dependent():
-    assert S.analyse_session(_session("vision"))["overall"] == "VISION-DEPENDENT"
+def test_weak_somatosensory():
+    r = S.analyse_session(_session("weak_somatosensory"))
+    assert r["overall"] == "WEAK SOMATOSENSORY USE" and r["sensory"]["low"] == ["somatosensory"]
 
 
-def test_somatosensory_dependent():
-    assert S.analyse_session(_session("somatosensory"))["overall"] == "SOMATOSENSORY-DEPENDENT"
+def test_weak_visual():
+    r = S.analyse_session(_session("weak_visual"))
+    assert r["overall"] == "WEAK VISUAL USE" and r["sensory"]["low"] == ["visual"]
 
 
-def test_fails_on_vestibular_alone():
-    r = S.analyse_session(_session("vestibular"))
-    assert r["overall"] == "FAILS ON VESTIBULAR INPUT ALONE"
+def test_weak_vestibular():
+    r = S.analyse_session(_session("weak_vestibular"))
+    assert r["overall"] == "WEAK VESTIBULAR USE"
+    assert r["sensory"]["ratios"]["vestibular"] == 0 and r["sensory"]["scores"]["ec_foam"] == 0
     assert r["trials"]["ec_foam"]["fall_direction"] == "to the RIGHT"
     assert r["trials"]["ec_foam"]["los_used_pct"] == 100
 
@@ -138,6 +141,27 @@ def test_wrong_lean_order_is_flagged():
     assert any("did not point where expected" in c for c in r["caveats"])
 
 
+def test_sensory_ratios_in_report():
+    r = S.analyse_session(_session("normal"))
+    rat = r["sensory"]["ratios"]
+    assert set(rat) == {"somatosensory", "visual", "vestibular"} and all(0 <= v <= 100 for v in rat.values())
+    assert sum(rat.values()) > 100            # separate abilities, not shares of 100
+    txt = S.report_text(r)
+    assert "Sensory ratios" in txt and "Focus for rehabilitation" in txt
+
+
+def test_unsteady_reference_is_not_blamed_on_one_sense():
+    d = Path(tempfile.mkdtemp())
+    S.DEMO["_unsteady"] = {"los": (3, 2, 2, 2), "eo_firm": (2.0, 1.8), "ec_firm": (2.2, 2.0),
+                           "eo_foam": (2.2, 2.0), "ec_foam": (2.4, 2.2)}
+    try:
+        S.write_demo("_unsteady", d)
+    finally:
+        del S.DEMO["_unsteady"]
+    r = S.analyse_session(d)
+    assert r["overall"] == "UNSTEADY EVEN WITH ALL SENSES AVAILABLE"
+
+
 def test_missing_everything_is_insufficient():
     r = S.analyse_session(Path(tempfile.mkdtemp()))
     assert r["overall"].startswith("INSUFFICIENT")
@@ -154,9 +178,10 @@ def test_missing_condition_is_unclear_not_normal():
 
 
 def test_no_los_still_runs_with_caveat():
-    d = _session("vision"); (d / "los.csv").unlink()
+    d = _session("weak_somatosensory"); (d / "los.csv").unlink()
     r = S.analyse_session(d)
-    assert r["overall"] == "VISION-DEPENDENT" and any("limits-of-stability" in c for c in r["caveats"])
+    assert "SOMATOSENSORY" in r["overall"] and any("limits-of-stability" in c for c in r["caveats"])
+    assert not r["sensory"]["ratios"] and any("x ref" in c for c in r["caveats"])   # cruder fallback, said so
 
 
 def test_low_sample_rate_is_insufficient():
